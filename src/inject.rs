@@ -1,5 +1,5 @@
-use crate::mount;
 use crate::hookfs;
+use crate::mount;
 
 use std::fs::rename;
 use std::path::{Path, PathBuf};
@@ -35,17 +35,18 @@ impl InjectionBuilder {
         let new_filename = format!("__chaosfs__{}__", original_filename);
         new_path.push(new_filename.as_str());
 
-        return Ok(InjectionBuilder{
+        return Ok(InjectionBuilder {
             original_path: Some(original_path),
             new_path: Some(new_path),
-        })
+        });
     }
 
     pub fn run(self) -> Result<Injection> {
-        if let InjectionBuilder{
+        if let InjectionBuilder {
             original_path: Some(original_path),
-            new_path: Some(new_path)
-        } = self {
+            new_path: Some(new_path),
+        } = self
+        {
             if mount::is_root(&original_path)? {
                 // TODO: make the parent mount points private before move mount points
                 mount::move_mount(&original_path, &new_path)?;
@@ -54,21 +55,20 @@ impl InjectionBuilder {
             }
 
             let fs = hookfs::HookFs::new(&original_path, &new_path);
-            let session =  unsafe {
+            let session = unsafe {
                 std::fs::create_dir_all(new_path.as_path())?;
-        
+
                 fuse::spawn_mount(fs, &original_path, &[])?
             };
-    
+
             return Ok(Injection {
                 original_path,
                 new_path,
                 fuse_session: Some(session),
-            })
+            });
         } else {
-            return Err(anyhow!("run without setting path"))
+            return Err(anyhow!("run without setting path"));
         }
-        
     }
 }
 

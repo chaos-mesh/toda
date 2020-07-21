@@ -1,11 +1,12 @@
 mod hookfs;
+mod inject;
 mod mount;
 mod namespace;
-mod inject;
 
 use inject::InjectionBuilder;
 
-use anyhow::{Result};
+use anyhow::{anyhow, Result};
+use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 
 use std::path::{Path, PathBuf};
@@ -27,14 +28,17 @@ fn main() -> Result<()> {
         namespace::enter_mnt_namespace(pid)?
     }
 
-    let injection = InjectionBuilder::new()
-        .path(option.path)?
-        .run()?;
+    let injection = InjectionBuilder::new().path(option.path)?.run()?;
 
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    stdin.read_line(&mut line)?;
-    
+    let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
+
+    'outer: loop {
+        // Pick up signals that arrived since last time
+        for _ in signals.forever() {
+            break 'outer;
+        }
+    }
+
     drop(injection);
     return Ok(());
 }
