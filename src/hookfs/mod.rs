@@ -17,16 +17,6 @@ impl HookFs {
             original_path: original_path.as_ref().to_owned(),
         };
     }
-
-    pub fn mount(&self) -> Result<BackgroundSession> {
-        let session = unsafe {
-            std::fs::create_dir_all(&self.mount_path)?;
-
-            fuse::spawn_mount(self.clone(), &self.mount_path, &[])?
-        };
-
-        Ok(session)
-    }
 }
 
 impl Filesystem for HookFs {
