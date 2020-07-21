@@ -5,11 +5,11 @@ mod namespace;
 
 use inject::InjectionBuilder;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]

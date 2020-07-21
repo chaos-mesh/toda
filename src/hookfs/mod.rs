@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fuse::{BackgroundSession, Filesystem};
+use fuse::Filesystem;
 use time::Timespec;
 
 use std::path::{Path, PathBuf};
