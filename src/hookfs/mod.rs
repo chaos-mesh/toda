@@ -2,11 +2,12 @@ use anyhow::Result;
 use fuse::{FileAttr, FileType, Filesystem};
 use time::{get_time, Timespec};
 
-use libc::getxattr;
+use libc::{getxattr};
 
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
 use nix::unistd::{lseek, read, Whence, AccessFlags};
+use nix::dir;
 
 use tracing::{debug, trace};
 
@@ -14,13 +15,19 @@ use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::os::unix::ffi::OsStrExt;
+use std::cell::RefCell;
+use std::ffi::OsStr;
 
 #[derive(Clone, Debug)]
 pub struct HookFs {
     mount_path: PathBuf,
     original_path: PathBuf,
 
-    opened_files: Vec<Box<RawFd>>,
+    files_counter: usize,
+    opened_files: HashMap<usize, RawFd>,
+
+    dirs_counter: usize,
+    opened_dirs: HashMap<usize, RefCell<dir::Dir>>,
 
     // map from inode to real path
     inode_map: HashMap<u64, PathBuf>,
@@ -34,9 +41,24 @@ impl HookFs {
         return HookFs {
             mount_path: mount_path.as_ref().to_owned(),
             original_path: original_path.as_ref().to_owned(),
-            opened_files: Vec::new(),
+            files_counter: 0,
+            opened_files: HashMap::new(),
+            dirs_counter: 0,
+            opened_dirs: HashMap::new(),
             inode_map,
         };
+    }
+}
+
+fn convert_filetype(file_type: dir::Type) -> FileType {
+    match file_type {
+        dir::Type::Fifo => FileType::NamedPipe,
+        dir::Type::CharacterDevice => FileType::CharDevice,
+        dir::Type::Directory => FileType::Directory,
+        dir::Type::BlockDevice => FileType::BlockDevice,
+        dir::Type::File => FileType::RegularFile,
+        dir::Type::Symlink => FileType::Symlink,
+        dir::Type::Socket => FileType::Socket,
     }
 }
 
@@ -61,7 +83,7 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Option<FileAttr> {
         mtime: Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
         ctime: Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32),
         kind,
-        perm: (stat.st_mode & 0777) as u16,
+        perm: (stat.st_mode & 0o777) as u16,
         nlink: stat.st_nlink as u32,
         uid: stat.st_uid,
         gid: stat.st_gid,
@@ -271,10 +293,15 @@ impl Filesystem for HookFs {
         if let Some(path) = self.inode_map.get(&ino) {
             match open(path, filtered_flags, stat::Mode::all()) {
                 Ok(fd) => {
-                    self.opened_files.push(Box::new(fd));
+                    let id = self.files_counter;
+                    self.files_counter += 1;
+
+                    self.opened_files.insert(id, fd);
                     let fh = (self.opened_files.len() - 1) as u64;
 
-                    trace!("return with fh: {}, flags: {}", fh, flags);
+                    trace!("return with fh: {}, flags: {}", fh, filtered_flags.bits());
+
+                    // TODO: figure out which flag should be set here
                     reply.opened(fh, flags)
                 }
                 Err(err) => {
@@ -298,8 +325,7 @@ impl Filesystem for HookFs {
         size: u32,
         reply: fuse::ReplyData,
     ) {
-        let fd = self.opened_files[fh as usize].clone();
-        let fd: RawFd = *fd;
+        let fd: RawFd = self.opened_files[&(fh as usize)];
         if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
@@ -371,8 +397,32 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument]
     fn opendir(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
-        debug!("unimplemented");
-        reply.opened(0, 0);
+        let path = self.inode_map[&ino].as_path();
+
+        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
+        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
+            Some(flags) => flags,
+            None => {
+                reply.error(-1); // TODO: set errno to unknown flags
+                return;
+            }
+        };
+        
+        let dir = match dir::Dir::open(path, filtered_flags, stat::Mode::all()) {
+            Ok(dir) => dir,
+            Err(err) => {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        };
+        let id = self.dirs_counter;
+        self.dirs_counter += 1;
+
+        self.opened_dirs.insert(id, RefCell::new(dir));
+        trace!("return with fh: {}, flags: {}", id, flags);
+        reply.opened(id as u64, flags);
     }
     #[tracing::instrument]
     fn readdir(
@@ -381,21 +431,62 @@ impl Filesystem for HookFs {
         ino: u64,
         fh: u64,
         offset: i64,
-        reply: fuse::ReplyDirectory,
+        mut reply: fuse::ReplyDirectory,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        let offset = offset as usize;
+        let dir = &self.opened_dirs[&(fh as usize)];
+
+        // TODO: optimize the implementation
+        let all_entries: Vec<_> = dir.borrow_mut().iter().collect();
+        if offset >= all_entries.len() {
+            trace!("empty reply");
+            reply.ok();
+            return;
+        }
+        for (index, entry) in all_entries.iter().enumerate().skip(offset as usize) {
+            match entry {
+                Ok(entry) => {
+                    let name = entry.file_name();
+                    let name = OsStr::from_bytes(name.to_bytes());
+
+                    let file_type = match entry.file_type() {
+                        Some(file_type) => convert_filetype(file_type),
+                        None => {
+                            debug!("unknown file_type");
+                            reply.error(-1);
+                            return;
+                        }
+                    };
+                    if !reply.add(entry.ino(), (index + 1) as i64, file_type, name) {
+                        trace!("add file {:?}", entry);
+                    } else {
+                        trace!("buffer is full");
+                        break;
+                    }
+                }
+                Err(err) => {
+                    trace!("return with error: {}", err);
+                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                    reply.error(errno);
+                    return;
+                }
+            }
+        }
+
+        trace!("iterated all files");
+        reply.ok();
+        return;
     }
     #[tracing::instrument]
     fn releasedir(
         &mut self,
         req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _flags: u32,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
+        self.opened_dirs.remove(&(fh as usize));
         reply.ok();
     }
     #[tracing::instrument]
