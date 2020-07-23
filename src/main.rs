@@ -2,20 +2,22 @@ mod hookfs;
 mod inject;
 mod mount;
 mod namespace;
+mod ptrace;
 
-use inject::InjectionBuilder;
+use inject::{InjectionBuilder, Injection};
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 
 use std::path::PathBuf;
+use std::sync::mpsc::channel;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
 struct Options {
     #[structopt(short, long)]
-    pid: Option<i32>,
+    pid: i32,
 
     #[structopt(long)]
     path: PathBuf,
@@ -24,20 +26,19 @@ struct Options {
 fn main() -> Result<()> {
     let option = Options::from_args();
 
-    if let Some(pid) = option.pid {
-        namespace::enter_mnt_namespace(pid)?
-    }
+    // TODO: enter namespace in another thread
+    namespace::enter_mnt_namespace(option.pid)?;
 
-    let injection = InjectionBuilder::new().path(option.path)?.run()?;
+    let injection = InjectionBuilder::new()
+        .path(option.path)?
+        .pid(option.pid)?
+        .mount()?;
+
+    injection.reopen()?;
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
-    'outer: loop {
-        // Pick up signals that arrived since last time
-        for _ in signals.forever() {
-            break 'outer;
-        }
-    }
+    signals.forever().next();
 
     drop(injection);
     return Ok(());

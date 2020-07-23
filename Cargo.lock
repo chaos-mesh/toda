@@ -292,6 +292,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fuse",
+ "libc",
  "nix",
  "signal-hook",
  "structopt",

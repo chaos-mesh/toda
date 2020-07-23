@@ -1,6 +1,9 @@
 use anyhow::Result;
 use fuse::Filesystem;
-use time::Timespec;
+use fuse::FileAttr;
+use time::{get_time, Timespec};
+
+use nix::sys::stat;
 
 use std::path::{Path, PathBuf};
 
@@ -20,26 +23,44 @@ impl HookFs {
 }
 
 impl Filesystem for HookFs {
-    fn init(&mut self, _req: &fuse::Request) -> Result<(), nix::libc::c_int> {
+    fn init(&mut self, req: &fuse::Request) -> Result<(), nix::libc::c_int> {
+        println!("init: {:?}", req);
         Ok(())
     }
-    fn destroy(&mut self, _req: &fuse::Request) {}
+    fn destroy(&mut self, req: &fuse::Request) {
+        println!("destroy: {:?}", req);
+    }
     fn lookup(
         &mut self,
-        _req: &fuse::Request,
-        _parent: u64,
-        _name: &std::ffi::OsStr,
+        req: &fuse::Request,
+        parent: u64,
+        name: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
-        reply.error(nix::libc::ENOSYS);
+        let time = get_time();
+        println!("lookup: {:?} {:?} {:?} {:?}", req, parent, name, reply);
+
+        let mut sourceMount = self.original_path.clone();
+        sourceMount.push(name);
+        match stat::stat(&sourceMount) {
+            Ok(stat) => {
+                reply.entry(&time, , generation);
+            }
+            Err(err) => {
+                reply.error(err.as_errno())
+            }
+        }
     }
-    fn forget(&mut self, _req: &fuse::Request, _ino: u64, _nlookup: u64) {}
-    fn getattr(&mut self, _req: &fuse::Request, _ino: u64, reply: fuse::ReplyAttr) {
+    fn forget(&mut self, req: &fuse::Request, ino: u64, nlookup: u64) {
+        println!("forget: {:?} {:?} {:?}", req, ino, nlookup);
+    }
+    fn getattr(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
+        println!("getattr: {:?} {:?} {:?}", req, ino, reply);
         reply.error(nix::libc::ENOSYS);
     }
     fn setattr(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _mode: Option<u32>,
         _uid: Option<u32>,
@@ -54,20 +75,23 @@ impl Filesystem for HookFs {
         _flags: Option<u32>,
         reply: fuse::ReplyAttr,
     ) {
+        println!("setattr: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
-    fn readlink(&mut self, _req: &fuse::Request, _ino: u64, reply: fuse::ReplyData) {
+    fn readlink(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
+        println!("readlink: {:?} {:?} {:?}", req, ino, reply);
         reply.error(nix::libc::ENOSYS);
     }
     fn mknod(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _parent: u64,
         _name: &std::ffi::OsStr,
         _mode: u32,
         _rdev: u32,
         reply: fuse::ReplyEntry,
     ) {
+        println!("mknod: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
     fn mkdir(
@@ -129,18 +153,20 @@ impl Filesystem for HookFs {
     ) {
         reply.error(nix::libc::ENOSYS);
     }
-    fn open(&mut self, _req: &fuse::Request, _ino: u64, _flags: u32, reply: fuse::ReplyOpen) {
+    fn open(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+        println!("open: {:?} {:?} {:?} {:?}", req, ino, flags, reply);
         reply.opened(0, 0);
     }
     fn read(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _offset: i64,
         _size: u32,
         reply: fuse::ReplyData,
     ) {
+        println!("read: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
     fn write(
@@ -187,40 +213,45 @@ impl Filesystem for HookFs {
     ) {
         reply.error(nix::libc::ENOSYS);
     }
-    fn opendir(&mut self, _req: &fuse::Request, _ino: u64, _flags: u32, reply: fuse::ReplyOpen) {
+    fn opendir(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+        println!("opendir: {:?} {:?} {:?} {:?}", req, ino, flags, reply);
         reply.opened(0, 0);
     }
     fn readdir(
         &mut self,
-        _req: &fuse::Request,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
+        req: &fuse::Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
         reply: fuse::ReplyDirectory,
     ) {
+        println!("readdir: {:?} {:?} {:?} {:?} {:?}", req, ino, fh, offset, reply);
         reply.error(nix::libc::ENOSYS);
     }
     fn releasedir(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _flags: u32,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("releasedir: {:?}", req);
         reply.ok();
     }
     fn fsyncdir(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("fsyncdir: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
-    fn statfs(&mut self, _req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
+    fn statfs(&mut self, req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
+        println!("statfs: {:?}", req);
         reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
     }
     fn setxattr(
@@ -237,15 +268,17 @@ impl Filesystem for HookFs {
     }
     fn getxattr(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _name: &std::ffi::OsStr,
         _size: u32,
         reply: fuse::ReplyXattr,
     ) {
+        println!("getxattr: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
-    fn listxattr(&mut self, _req: &fuse::Request, _ino: u64, _size: u32, reply: fuse::ReplyXattr) {
+    fn listxattr(&mut self, req: &fuse::Request, _ino: u64, _size: u32, reply: fuse::ReplyXattr) {
+        println!("listxattr: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
     fn removexattr(
@@ -257,7 +290,8 @@ impl Filesystem for HookFs {
     ) {
         reply.error(nix::libc::ENOSYS);
     }
-    fn access(&mut self, _req: &fuse::Request, _ino: u64, _mask: u32, reply: fuse::ReplyEmpty) {
+    fn access(&mut self, req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
+        println!("access: {:?} {:?} {:?} {:?}", req, ino, mask, reply);
         reply.error(nix::libc::ENOSYS);
     }
     fn create(
@@ -273,7 +307,7 @@ impl Filesystem for HookFs {
     }
     fn getlk(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _lock_owner: u64,
@@ -283,11 +317,12 @@ impl Filesystem for HookFs {
         _pid: u32,
         reply: fuse::ReplyLock,
     ) {
+        println!("getlk: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
     fn setlk(
         &mut self,
-        _req: &fuse::Request,
+        req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _lock_owner: u64,
@@ -298,6 +333,7 @@ impl Filesystem for HookFs {
         _sleep: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("setlk: {:?}", req);
         reply.error(nix::libc::ENOSYS);
     }
     fn bmap(
