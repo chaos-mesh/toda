@@ -128,8 +128,11 @@ impl Injection {
                     .file_name().ok_or(anyhow!("fd doesn't contain a filename"))?
                     .to_str().ok_or(anyhow!("fd contains non-UTF-8 character"))?
                     .parse()?;
+                println!("BEFORE READ LINK");
                 if let Ok(path) = read_link(&path) {
+                    println!("READ LINK SUCCESSFULLY");
                     if path.exists() && path.starts_with(base_path) {
+                        println!("REOPEN FILE");
                         self.reopen_file(&thread, fd, path.as_path())?;
                     }
                 }
@@ -147,14 +150,20 @@ impl Injection {
     }
 
     fn reopen_file<P: AsRef<Path>>(&self, thread: &TracedThread, fd: u64, path: P) -> Result<()> {
-        let striped_path = path.as_ref().strip_prefix(self.new_path.as_path())?;
+        let base_path = if self.direction == MountDirection::EnableChaos {
+            self.new_path.as_path()
+        } else {
+            self.original_path.as_path()
+        };
+
+        let striped_path = path.as_ref().strip_prefix(base_path)?;
+
         let original_path = if self.direction == MountDirection::EnableChaos {
             self.original_path.join(striped_path)
         } else {
             self.new_path.join(striped_path)
         };
 
-        println!("USE {:?} TO REPLACE {:?}", original_path.display(), path.as_ref().display());
         let flags = thread.fcntl(fd, FcntlArg::F_GETFD)?;
         let mode = thread.fcntl(fd, FcntlArg::F_GETFL)? & 0003; // Only get Access Mode
 
@@ -171,9 +180,7 @@ impl Injection {
     }
 
     pub fn recover(&mut self) -> Result<()> {
-        println!("START TO RECOVER");
         self.reopen()?;
-        println!("RECOVER SUCCESSFULLY");
 
         let injection = self.fuse_session.take().unwrap();
         drop(injection);

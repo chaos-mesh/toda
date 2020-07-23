@@ -117,14 +117,17 @@ impl Filesystem for HookFs {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
                     Some(stat) => {
+                        println!("RETURN STAT {:?}", stat);
                         reply.attr(&time, &stat)
                     }
                     None => {
+                        println!("RETURN FMT STAT {:?}", stat);
                         reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
                     }
                 }
             }
             Err(err) => {
+                println!("RETURN ERR");
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
             }
@@ -225,7 +228,7 @@ impl Filesystem for HookFs {
     ) {
         reply.error(nix::libc::ENOSYS);
     }
-    fn open(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+    fn open(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) &(!0x8000); // 0x8000 is magic
@@ -303,6 +306,7 @@ impl Filesystem for HookFs {
         _lock_owner: u64,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("flush");
         reply.error(nix::libc::ENOSYS);
     }
     fn release(
@@ -315,6 +319,7 @@ impl Filesystem for HookFs {
         _flush: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("release");
         reply.ok();
     }
     fn fsync(
@@ -325,6 +330,7 @@ impl Filesystem for HookFs {
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("fsync");
         reply.error(nix::libc::ENOSYS);
     }
     fn opendir(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
@@ -378,6 +384,7 @@ impl Filesystem for HookFs {
         _position: u32,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("setxattr");
         reply.error(nix::libc::ENOSYS);
     }
     fn getxattr(
@@ -402,6 +409,7 @@ impl Filesystem for HookFs {
         _name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        println!("removexattr");
         reply.error(nix::libc::ENOSYS);
     }
     fn access(&mut self, req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
@@ -417,6 +425,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyCreate,
     ) {
+        println!("create");
         reply.error(nix::libc::ENOSYS);
     }
     fn getlk(
@@ -458,6 +467,7 @@ impl Filesystem for HookFs {
         _idx: u64,
         reply: fuse::ReplyBmap,
     ) {
+        println!("bmap");
         reply.error(nix::libc::ENOSYS);
     }
 }
