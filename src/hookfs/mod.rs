@@ -4,9 +4,9 @@ use time::{get_time, Timespec};
 
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
-use nix::unistd::{lseek, read, Whence};
+use nix::unistd::{lseek, read, Whence, AccessFlags};
 
-use tracing::{debug, trace};
+use tracing::{trace};
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
@@ -25,11 +25,14 @@ pub struct HookFs {
 
 impl HookFs {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(mount_path: P1, original_path: P2) -> HookFs {
+        let mut inode_map = HashMap::new();
+        inode_map.insert(1, original_path.as_ref().to_owned());
+
         return HookFs {
             mount_path: mount_path.as_ref().to_owned(),
             original_path: original_path.as_ref().to_owned(),
             opened_files: Vec::new(),
-            inode_map: HashMap::new(),
+            inode_map,
         };
     }
 }
@@ -458,8 +461,29 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument]
     fn access(&mut self, req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
-        trace!("access: {:?} {:?} {:?} {:?}", req, ino, mask, reply);
-        reply.error(nix::libc::ENOSYS);
+        let path = self.inode_map[&ino].as_path();
+        
+        let mask = match AccessFlags::from_bits(mask as i32) {
+            Some(mask) => mask,
+            None => {
+                trace!("unknown mask {}", mask);
+                reply.error(-1);
+                return
+            }
+        };
+        if let Err(err) = nix::unistd::access(path.as_path(), mask) {
+            match err.as_errno() {
+                Some(errno) => {
+                    reply.error(errno as i32)
+                }
+                None => {
+                    trace!("unknown error {}", err);
+                    reply.error(-1)
+                }
+            }
+        } else {
+            reply.ok()
+        }
     }
     #[tracing::instrument]
     fn create(
