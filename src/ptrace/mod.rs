@@ -128,12 +128,6 @@ impl TracedThread {
         });
     }
 
-    pub fn cont(&self) -> Result<()> {
-        ptrace::cont(Pid::from_raw(self.tid), None)?;
-
-        return Ok(());
-    }
-
     pub fn detach(&self) -> Result<()> {
         ptrace::detach(Pid::from_raw(self.tid), None)?;
 
