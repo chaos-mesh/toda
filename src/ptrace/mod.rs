@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Result};
+use nix::fcntl::FcntlArg;
+use nix::fcntl::FcntlArg::*;
 use nix::fcntl::OFlag;
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
@@ -6,8 +8,6 @@ use nix::sys::stat::Mode;
 use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
-use nix::fcntl::FcntlArg;
-use nix::fcntl::FcntlArg::*;
 
 use std::fs::read_dir;
 use std::os::unix::ffi::OsStrExt;
@@ -65,7 +65,7 @@ impl TracedThread {
 
         let rip = regs.rip;
         let rip_ins = ptrace::read(Pid::from_raw(self.tid), rip as *mut libc::c_void)?;
-        
+
         let guard = ThreadGuard {
             tid: self.tid,
             regs,
@@ -139,16 +139,16 @@ impl TracedThread {
     }
 
     pub fn close(&self, fd: u64) -> Result<u64> {
-        return self.syscall(3,  &[fd]);
+        return self.syscall(3, &[fd]);
     }
 
     pub fn fcntl(&self, fd: u64, arg: FcntlArg) -> Result<u64> {
         let (cmd, args) = match arg {
             F_GETFD => (libc::F_GETFD, 0),
             F_GETFL => (libc::F_GETFL, 0),
-            _ => unimplemented!()
+            _ => unimplemented!(),
         };
-        return self.syscall(72, &[fd, cmd as u64, args as u64])
+        return self.syscall(72, &[fd, cmd as u64, args as u64]);
     }
 
     pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {

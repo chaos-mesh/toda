@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
 use nix::fcntl::FcntlArg;
-use nix::sys::stat::Mode;
 use nix::fcntl::OFlag;
+use nix::sys::stat::Mode;
 
 #[derive(Default)]
 pub struct InjectionBuilder {
@@ -125,14 +125,13 @@ impl Injection {
             for fd in read_dir(fd_dir_path)?.into_iter() {
                 let path = fd?.path();
                 let fd = path
-                    .file_name().ok_or(anyhow!("fd doesn't contain a filename"))?
-                    .to_str().ok_or(anyhow!("fd contains non-UTF-8 character"))?
+                    .file_name()
+                    .ok_or(anyhow!("fd doesn't contain a filename"))?
+                    .to_str()
+                    .ok_or(anyhow!("fd contains non-UTF-8 character"))?
                     .parse()?;
-                println!("BEFORE READ LINK");
                 if let Ok(path) = read_link(&path) {
-                    println!("READ LINK SUCCESSFULLY");
                     if path.exists() && path.starts_with(base_path) {
-                        println!("REOPEN FILE");
                         self.reopen_file(&thread, fd, path.as_path())?;
                     }
                 }
@@ -169,14 +168,12 @@ impl Injection {
 
         let flags = OFlag::from_bits(flags as i32).ok_or(anyhow!("flags is not available"))?;
         let mode = Mode::from_bits(mode as u32).ok_or(anyhow!("mode is not available"))?;
-        
-        // println!("Trying to open");
+
         let new_open_fd = thread.open(original_path, flags, mode)?;
-        // let new_open_fd = thread.open(path, flags, mode)?;
         thread.dup2(new_open_fd, fd)?;
         thread.close(new_open_fd)?;
-        
-        return Ok(())
+
+        return Ok(());
     }
 
     pub fn recover(&mut self) -> Result<()> {
@@ -193,6 +190,6 @@ impl Injection {
             rename(&self.new_path, &self.original_path).unwrap();
         }
 
-        return Ok(())
+        return Ok(());
     }
 }
