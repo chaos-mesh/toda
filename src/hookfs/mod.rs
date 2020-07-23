@@ -2,15 +2,18 @@ use anyhow::Result;
 use fuse::{FileAttr, FileType, Filesystem};
 use time::{get_time, Timespec};
 
+use libc::getxattr;
+
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
 use nix::unistd::{lseek, read, Whence, AccessFlags};
 
-use tracing::{trace};
+use tracing::{debug, trace};
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
 
 #[derive(Clone, Debug)]
 pub struct HookFs {
@@ -86,7 +89,6 @@ impl Filesystem for HookFs {
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
-        trace!("FUSE lookup");
         let time = get_time();
 
         let mut source_mount = self.original_path.clone();
@@ -116,11 +118,10 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument]
     fn forget(&mut self, req: &fuse::Request, ino: u64, nlookup: u64) {
-        trace!("FUSE forget");
+        debug!("umimplemented forget");
     }
     #[tracing::instrument]
     fn getattr(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
-        trace!("FUSE getattr");
         let time = get_time();
         let path = self.inode_map[&ino].as_path();
 
@@ -162,12 +163,12 @@ impl Filesystem for HookFs {
         _flags: Option<u32>,
         reply: fuse::ReplyAttr,
     ) {
-        trace!("setattr: {:?}", req);
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
     fn readlink(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
-        trace!("readlink: {:?} {:?} {:?}", req, ino, reply);
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -180,7 +181,7 @@ impl Filesystem for HookFs {
         _rdev: u32,
         reply: fuse::ReplyEntry,
     ) {
-        trace!("mknod: {:?}", req);
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -192,6 +193,7 @@ impl Filesystem for HookFs {
         _mode: u32,
         reply: fuse::ReplyEntry,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -202,6 +204,7 @@ impl Filesystem for HookFs {
         _name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -212,6 +215,7 @@ impl Filesystem for HookFs {
         _name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -223,6 +227,7 @@ impl Filesystem for HookFs {
         _link: &std::path::Path,
         reply: fuse::ReplyEntry,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -235,6 +240,7 @@ impl Filesystem for HookFs {
         _newname: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -246,6 +252,7 @@ impl Filesystem for HookFs {
         _newname: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
+        debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -253,13 +260,6 @@ impl Filesystem for HookFs {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000); // 0x8000 is magic
-
-        trace!(
-            "FLAGS: {:#X} {:#X} {:#X}",
-            flags,
-            filtered_flags,
-            filtered_flags as i32
-        );
         let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
             Some(flags) => flags,
             None => {
@@ -272,15 +272,19 @@ impl Filesystem for HookFs {
             match open(path, filtered_flags, stat::Mode::all()) {
                 Ok(fd) => {
                     self.opened_files.push(Box::new(fd));
+                    let fh = (self.opened_files.len() - 1) as u64;
 
-                    reply.opened((self.opened_files.len() - 1) as u64, flags)
+                    trace!("return with fh: {}, flags: {}", fh, flags);
+                    reply.opened(fh, flags)
                 }
                 Err(err) => {
+                    trace!("return with err: {}", err);
                     let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                     reply.error(errno)
                 }
             }
         } else {
+            trace!("return with errno: -1");
             reply.error(-1) // TODO: set errno to special value that no inode found
         }
     }
@@ -294,8 +298,6 @@ impl Filesystem for HookFs {
         size: u32,
         reply: fuse::ReplyData,
     ) {
-        trace!("read: {:?} {:?} {:?} {:?} {:?}", req, ino, fh, offset, size);
-
         let fd = self.opened_files[fh as usize].clone();
         let fd: RawFd = *fd;
         if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
@@ -307,10 +309,12 @@ impl Filesystem for HookFs {
         let mut buf = Vec::new();
         buf.resize(size as usize, 0);
         if let Err(err) = read(fd, &mut buf) {
+            trace!("return with err: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
             return;
         };
+        trace!("return with data: {:?}", buf);
         reply.data(&buf)
     }
     #[tracing::instrument]
@@ -324,6 +328,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyWrite,
     ) {
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -335,7 +340,7 @@ impl Filesystem for HookFs {
         _lock_owner: u64,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("flush");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -349,7 +354,7 @@ impl Filesystem for HookFs {
         _flush: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("release");
+        debug!("unimplemented");
         reply.ok();
     }
     #[tracing::instrument]
@@ -361,12 +366,12 @@ impl Filesystem for HookFs {
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("fsync");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
     fn opendir(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
-        trace!("opendir: {:?} {:?} {:?} {:?}", req, ino, flags, reply);
+        debug!("unimplemented");
         reply.opened(0, 0);
     }
     #[tracing::instrument]
@@ -378,14 +383,7 @@ impl Filesystem for HookFs {
         offset: i64,
         reply: fuse::ReplyDirectory,
     ) {
-        trace!(
-            "readdir: {:?} {:?} {:?} {:?} {:?}",
-            req,
-            ino,
-            fh,
-            offset,
-            reply
-        );
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -397,7 +395,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("releasedir: {:?}", req);
+        debug!("unimplemented");
         reply.ok();
     }
     #[tracing::instrument]
@@ -409,12 +407,12 @@ impl Filesystem for HookFs {
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("fsyncdir: {:?}", req);
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
     fn statfs(&mut self, req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
-        trace!("statfs: {:?}", req);
+        debug!("unimplemented");
         reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
     }
     #[tracing::instrument]
@@ -428,24 +426,52 @@ impl Filesystem for HookFs {
         _position: u32,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("setxattr");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
     fn getxattr(
         &mut self,
         req: &fuse::Request,
-        _ino: u64,
-        _name: &std::ffi::OsStr,
-        _size: u32,
+        ino: u64,
+        name: &std::ffi::OsStr,
+        size: u32,
         reply: fuse::ReplyXattr,
     ) {
-        trace!("getxattr: {:?}", req);
-        reply.error(nix::libc::ENOSYS);
+        let path = self.inode_map[&ino].as_path();
+
+        let path_ptr = path.as_os_str().as_bytes() as *const [u8] as *const libc::c_char;
+        let name_ptr = name.as_bytes() as *const [u8] as *const libc::c_char;
+
+        let mut buf = Vec::new();
+        buf.resize(size as usize, 0u8);
+        let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_void;
+
+        let ret = unsafe {
+            getxattr(path_ptr, name_ptr, buf_ptr, size as usize)
+        };
+
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+
+            return
+        }
+
+        if size == 0 {
+            debug!("may error because of 0 size in getxattr");
+            trace!("return with size {}", ret);
+            reply.size(ret as u32);
+        } else {
+            trace!("return with data {:?}", buf);
+            reply.data(buf.as_slice());
+        }
     }
     #[tracing::instrument]
     fn listxattr(&mut self, req: &fuse::Request, _ino: u64, _size: u32, reply: fuse::ReplyXattr) {
-        trace!("listxattr: {:?}", req);
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -456,7 +482,7 @@ impl Filesystem for HookFs {
         _name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("removexattr");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -471,7 +497,7 @@ impl Filesystem for HookFs {
                 return
             }
         };
-        if let Err(err) = nix::unistd::access(path.as_path(), mask) {
+        if let Err(err) = nix::unistd::access(path, mask) {
             match err.as_errno() {
                 Some(errno) => {
                     reply.error(errno as i32)
@@ -495,7 +521,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyCreate,
     ) {
-        trace!("create");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -511,7 +537,7 @@ impl Filesystem for HookFs {
         _pid: u32,
         reply: fuse::ReplyLock,
     ) {
-        trace!("getlk: {:?}", req);
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -528,7 +554,7 @@ impl Filesystem for HookFs {
         _sleep: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        trace!("setlk: {:?}", req);
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument]
@@ -540,7 +566,7 @@ impl Filesystem for HookFs {
         _idx: u64,
         reply: fuse::ReplyBmap,
     ) {
-        trace!("bmap");
+        debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
 }
