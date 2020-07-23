@@ -4,14 +4,13 @@ mod mount;
 mod namespace;
 mod ptrace;
 
-use inject::{InjectionBuilder, Injection};
+use inject::InjectionBuilder;
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -29,7 +28,7 @@ fn main() -> Result<()> {
     // TODO: enter namespace in another thread
     namespace::enter_mnt_namespace(option.pid)?;
 
-    let injection = InjectionBuilder::new()
+    let mut injection = InjectionBuilder::new()
         .path(option.path)?
         .pid(option.pid)?
         .mount()?;
@@ -38,8 +37,10 @@ fn main() -> Result<()> {
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
+    println!("ARRIVE HERE 1");
     signals.forever().next();
 
-    drop(injection);
+    println!("ARRIVE HERE 2");
+    injection.recover()?;
     return Ok(());
 }

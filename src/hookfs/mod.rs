@@ -1,16 +1,24 @@
 use anyhow::Result;
-use fuse::Filesystem;
-use fuse::FileAttr;
+use fuse::{Filesystem, FileAttr, FileType};
 use time::{get_time, Timespec};
 
 use nix::sys::stat;
+use nix::fcntl::{open ,OFlag};
+use nix::unistd::{lseek, Whence, read};
 
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct HookFs {
     mount_path: PathBuf,
     original_path: PathBuf,
+
+    opened_files: Vec<Box<RawFd>>,
+
+    // map from inode to real path
+    inode_map: HashMap<u64, PathBuf>,
 }
 
 impl HookFs {
@@ -18,8 +26,43 @@ impl HookFs {
         return HookFs {
             mount_path: mount_path.as_ref().to_owned(),
             original_path: original_path.as_ref().to_owned(),
+            opened_files: Vec::new(),
+            inode_map: HashMap::new(),
         };
     }
+}
+
+// convert_libc_stat_to_fuse_stat converts file stat from libc form into fuse form.
+// returns None if the file type is unknown.
+fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Option<FileAttr> {
+    let kind = match stat.st_mode & libc::S_IFMT {
+        libc::S_IFBLK => FileType::BlockDevice,
+        libc::S_IFCHR => FileType::CharDevice,
+        libc::S_IFDIR => FileType::Directory,
+        libc::S_IFIFO => FileType::NamedPipe,
+        libc::S_IFLNK => FileType::Symlink,
+        libc::S_IFREG => FileType::RegularFile,
+        libc::S_IFSOCK => FileType::Socket,
+        _ => {
+            return None
+        }
+    };
+    return Some(FileAttr {
+        ino: stat.st_ino,
+        size: stat.st_size as u64,
+        blocks: stat.st_blocks as u64,
+        atime: Timespec::new(stat.st_atime, stat.st_atime_nsec as i32),
+        mtime: Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
+        ctime: Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32),
+        kind,
+        perm: (stat.st_mode & 0777) as u16,
+        nlink: stat.st_nlink as u32,
+        uid: stat.st_uid,
+        gid: stat.st_gid,
+        rdev: stat.st_rdev as u32,
+        crtime: Timespec::new(0, 0),  // It's macOS only
+        flags: 0, // It's macOS only
+    })
 }
 
 impl Filesystem for HookFs {
@@ -32,22 +75,33 @@ impl Filesystem for HookFs {
     }
     fn lookup(
         &mut self,
-        req: &fuse::Request,
-        parent: u64,
+        _req: &fuse::Request,
+        _parent: u64,
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
         let time = get_time();
-        println!("lookup: {:?} {:?} {:?} {:?}", req, parent, name, reply);
 
-        let mut sourceMount = self.original_path.clone();
-        sourceMount.push(name);
-        match stat::stat(&sourceMount) {
+        let mut source_mount = self.original_path.clone();
+        source_mount.push(name);
+        match stat::stat(&source_mount) {
             Ok(stat) => {
-                reply.entry(&time, , generation);
+                match convert_libc_stat_to_fuse_stat(stat) {
+                    Some(stat) => {
+                        self.inode_map.insert(stat.ino, source_mount);
+                        // TODO: support generation number
+                        // this can be implemented with ioctl FS_IOC_GETVERSION
+                        println!("reply with {:?} {:?}", &time, &stat);
+                        reply.entry(&time, &stat, 0);
+                    }
+                    None => {
+                        reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
+                    }
+                }
             }
             Err(err) => {
-                reply.error(err.as_errno())
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
             }
         }
     }
@@ -56,7 +110,25 @@ impl Filesystem for HookFs {
     }
     fn getattr(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
         println!("getattr: {:?} {:?} {:?}", req, ino, reply);
-        reply.error(nix::libc::ENOSYS);
+        let time = get_time();
+        let path = self.inode_map[&ino].as_path();
+
+        match stat::stat(path) {
+            Ok(stat) => {
+                match convert_libc_stat_to_fuse_stat(stat) {
+                    Some(stat) => {
+                        reply.attr(&time, &stat)
+                    }
+                    None => {
+                        reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
+                    }
+                }
+            }
+            Err(err) => {
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+            }
+        }
     }
     fn setattr(
         &mut self,
@@ -154,20 +226,62 @@ impl Filesystem for HookFs {
         reply.error(nix::libc::ENOSYS);
     }
     fn open(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
-        println!("open: {:?} {:?} {:?} {:?}", req, ino, flags, reply);
-        reply.opened(0, 0);
+        // filter out append. The kernel layer will translate the
+        // offsets for us appropriately.
+        let filtered_flags = flags & (!(libc::O_APPEND as u32)) &(!0x8000); // 0x8000 is magic
+
+        println!("FLAGS: {:#X} {:#X} {:#X}", flags, filtered_flags, filtered_flags as i32);
+        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
+            Some(flags) => flags,
+            None => {
+                reply.error(-1); // TODO: set errno to unknown flags
+                return
+            }
+        };
+        
+        if let Some(path) = self.inode_map.get(&ino) {
+                match open(path, filtered_flags, stat::Mode::all()) {
+                    Ok(fd) => {
+                        self.opened_files.push(Box::new(fd));
+
+                        reply.opened((self.opened_files.len() - 1) as u64, flags)
+                    }
+                    Err(err) => {
+                        let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                        reply.error(errno)
+                    }
+                }
+        } else {
+            reply.error(-1) // TODO: set errno to special value that no inode found
+        }
     }
     fn read(
         &mut self,
         req: &fuse::Request,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _size: u32,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
         reply: fuse::ReplyData,
     ) {
-        println!("read: {:?}", req);
-        reply.error(nix::libc::ENOSYS);
+        println!("read: {:?} {:?} {:?} {:?} {:?}", req, ino, fh ,offset, size);
+
+        let fd = self.opened_files[fh as usize].clone();
+        let fd: RawFd = *fd;
+        if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        }
+        
+        let mut buf = Vec::new();
+        buf.resize(size as usize, 0);
+        if let Err(err) = read(fd, &mut buf) {
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        };
+        reply.data(&buf)
     }
     fn write(
         &mut self,
