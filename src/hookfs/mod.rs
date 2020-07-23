@@ -16,7 +16,7 @@ use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::os::unix::ffi::OsStrExt;
 use std::cell::RefCell;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, CString};
 
 #[derive(Clone, Debug)]
 pub struct HookFs {
@@ -113,8 +113,7 @@ impl Filesystem for HookFs {
     ) {
         let time = get_time();
 
-        let mut source_mount = self.original_path.clone();
-        source_mount.push(name);
+        let source_mount = self.original_path.join(name);
         match stat::stat(&source_mount) {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
@@ -132,8 +131,8 @@ impl Filesystem for HookFs {
                 }
             }
             Err(err) => {
+                trace!("return with error: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                trace!("return with errno: {}", errno);
                 reply.error(errno);
             }
         }
@@ -197,14 +196,37 @@ impl Filesystem for HookFs {
     fn mknod(
         &mut self,
         req: &fuse::Request,
-        _parent: u64,
-        _name: &std::ffi::OsStr,
-        _mode: u32,
-        _rdev: u32,
+        parent: u64,
+        name: &std::ffi::OsStr,
+        mode: u32,
+        rdev: u32,
         reply: fuse::ReplyEntry,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let path = self.original_path.join(name);
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const i8;
+
+        trace!("mknod for {:?}", path);
+        let ret = unsafe {
+            libc::mknod(path_ptr, mode, rdev as u64)
+        };
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+
+            return
+        }
+        self.lookup(req, parent, name, reply);
     }
     #[tracing::instrument]
     fn mkdir(
@@ -302,7 +324,7 @@ impl Filesystem for HookFs {
                     trace!("return with fh: {}, flags: {}", fh, filtered_flags.bits());
 
                     // TODO: figure out which flag should be set here
-                    reply.opened(fh, flags)
+                    reply.opened(fh, filtered_flags.bits() as u32)
                 }
                 Err(err) => {
                     trace!("return with err: {}", err);
@@ -374,13 +396,13 @@ impl Filesystem for HookFs {
         &mut self,
         _req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _flags: u32,
         _lock_owner: u64,
         _flush: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
+        self.opened_files.remove(&(fh as usize));
         reply.ok();
     }
     #[tracing::instrument]
@@ -531,8 +553,27 @@ impl Filesystem for HookFs {
     ) {
         let path = self.inode_map[&ino].as_path();
 
-        let path_ptr = path.as_os_str().as_bytes() as *const [u8] as *const libc::c_char;
-        let name_ptr = name.as_bytes() as *const [u8] as *const libc::c_char;
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let name = match CString::new(name.as_bytes()) {
+            Ok(name) => name,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0u8);
