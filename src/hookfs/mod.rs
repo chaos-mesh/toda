@@ -6,7 +6,8 @@ use libc::{getxattr};
 
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
-use nix::unistd::{lseek, read, Whence, AccessFlags};
+use nix::sys::time::{TimeVal, TimeValLike};
+use nix::unistd::{lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
 use nix::dir;
 
 use tracing::{debug, trace};
@@ -172,13 +173,13 @@ impl Filesystem for HookFs {
     fn setattr(
         &mut self,
         req: &fuse::Request,
-        _ino: u64,
-        _mode: Option<u32>,
-        _uid: Option<u32>,
-        _gid: Option<u32>,
-        _size: Option<u64>,
-        _atime: Option<Timespec>,
-        _mtime: Option<Timespec>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<Timespec>,
+        mtime: Option<Timespec>,
         _fh: Option<u64>,
         _crtime: Option<Timespec>,
         _chgtime: Option<Timespec>,
@@ -186,8 +187,46 @@ impl Filesystem for HookFs {
         _flags: Option<u32>,
         reply: fuse::ReplyAttr,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        if let Some(path) = self.inode_map.get(&ino) {
+            if let Err(err) = chown(path, uid.map(|uid| Uid::from_raw(uid)), gid.map(|gid| Gid::from_raw(gid))) {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+            if let Some(mode) = mode {
+                if let Err(err) = stat::fchmodat(None, path, unsafe {stat::Mode::from_bits_unchecked(mode)}, stat::FchmodatFlags::FollowSymlink) {
+                    trace!("return with error: {}", err);
+                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                    reply.error(errno);
+                    return;
+                }
+            }
+            if let Some(size) = size {
+                if let Err(err) = truncate(path, size as i64) {
+                    trace!("return with error: {}", err);
+                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                    reply.error(errno);
+                    return;
+                }
+            }
+
+            if let (Some(atime), Some(mtime)) = (atime, mtime) {
+                let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
+                let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
+                // TODO: check whether one of them is Some
+                if let Err(err) = stat::utimes(path, &atime, &mtime) {
+                    trace!("return with error: {}", err);
+                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                    reply.error(errno);
+                    return;
+                }
+            }
+            
+            self.getattr(req, ino, reply)
+        } else {
+            reply.error(libc::ENOENT);
+        }
     }
     #[tracing::instrument]
     fn readlink(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
