@@ -18,6 +18,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::cell::RefCell;
 use std::ffi::{OsStr, CString};
 
+use fuse::consts::{FOPEN_KEEP_CACHE, FOPEN_DIRECT_IO};
+
 #[derive(Clone, Debug)]
 pub struct HookFs {
     mount_path: PathBuf,
@@ -113,12 +115,12 @@ impl Filesystem for HookFs {
     ) {
         let time = get_time();
 
-        let source_mount = self.original_path.join(name);
-        match stat::stat(&source_mount) {
+        let path = self.original_path.join(name);
+        match stat::stat(&path) {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
                     Some(stat) => {
-                        self.inode_map.insert(stat.ino, source_mount);
+                        self.inode_map.insert(stat.ino, path);
                         // TODO: support generation number
                         // this can be implemented with ioctl FS_IOC_GETVERSION
                         trace!("return with {:?}", stat);
@@ -315,16 +317,14 @@ impl Filesystem for HookFs {
         if let Some(path) = self.inode_map.get(&ino) {
             match open(path, filtered_flags, stat::Mode::all()) {
                 Ok(fd) => {
-                    let id = self.files_counter;
+                    let fh = self.files_counter;
                     self.files_counter += 1;
-
-                    self.opened_files.insert(id, fd);
-                    let fh = (self.opened_files.len() - 1) as u64;
+                    self.opened_files.insert(fh, fd);
 
                     trace!("return with fh: {}, flags: {}", fh, filtered_flags.bits());
 
-                    // TODO: figure out which flag should be set here
-                    reply.opened(fh, filtered_flags.bits() as u32)
+                    // TODO: force DIRECT_IO is not a great option
+                    reply.opened(fh as u64, FOPEN_DIRECT_IO)
                 }
                 Err(err) => {
                     trace!("return with err: {}", err);
@@ -630,15 +630,9 @@ impl Filesystem for HookFs {
             }
         };
         if let Err(err) = nix::unistd::access(path, mask) {
-            match err.as_errno() {
-                Some(errno) => {
-                    reply.error(errno as i32)
-                }
-                None => {
-                    trace!("unknown error {}", err);
-                    reply.error(-1)
-                }
-            }
+            trace!("return with error: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
         } else {
             reply.ok()
         }
@@ -648,13 +642,60 @@ impl Filesystem for HookFs {
         &mut self,
         _req: &fuse::Request,
         _parent: u64,
-        _name: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
         _mode: u32,
-        _flags: u32,
+        flags: u32,
         reply: fuse::ReplyCreate,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        let path = self.original_path.join(name);
+
+        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000); // 0x8000 is magic
+        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
+            Some(flags) => flags,
+            None => {
+                reply.error(-1); // TODO: set errno to unknown flags
+                return;
+            }
+        };
+
+        match open(&path, filtered_flags & OFlag::O_CREAT, stat::Mode::all()) {
+            Ok(fd) => {
+                match stat::stat(&path) {
+                    Ok(stat) => {
+                        match convert_libc_stat_to_fuse_stat(stat) {
+                            Some(stat) => {
+                                self.inode_map.insert(stat.ino, path);
+                                // TODO: support generation number
+                                // this can be implemented with ioctl FS_IOC_GETVERSION
+                                trace!("return with {:?}", stat);
+
+                                let time = get_time();
+
+                                let fh = self.files_counter;
+                                self.files_counter += 1;
+                                self.opened_files.insert(fh, fd);
+
+                                reply.created(&time, &stat, 0, fh as u64, flags);
+                            }
+                            None => {
+                                trace!("return with errno: -1");
+                                reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        trace!("return with error: {}", err);
+                        let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                        reply.error(errno);
+                    }
+                }
+            }
+            Err(err) => {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+            }
+        }
     }
     #[tracing::instrument]
     fn getlk(
