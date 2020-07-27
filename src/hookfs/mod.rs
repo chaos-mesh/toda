@@ -212,7 +212,7 @@ impl Filesystem for HookFs {
             return;
         }
         if let Some(mode) = mode {
-            if let Err(err) = stat::fchmodat(None, path, unsafe {stat::Mode::from_bits_unchecked(mode)}, stat::FchmodatFlags::FollowSymlink) {
+            if let Err(err) = stat::fchmodat(None, path,  stat::Mode::from_bits_truncate(mode), stat::FchmodatFlags::FollowSymlink) {
                 trace!("return with error: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
@@ -440,8 +440,8 @@ impl Filesystem for HookFs {
     fn open(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
-        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000); // 0x8000 is magic
-        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
+        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         if let Some(path) = self.inode_map.get(&ino) {
             match open(path, filtered_flags, stat::Mode::S_IRWXU) {
@@ -590,8 +590,8 @@ impl Filesystem for HookFs {
     fn opendir(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
         let path = self.inode_map[&ino].as_path();
 
-        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
-        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
+        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
         
         let dir = match dir::Dir::open(path, filtered_flags, stat::Mode::S_IRWXU) {
             Ok(dir) => dir,
@@ -967,10 +967,10 @@ impl Filesystem for HookFs {
         };
         let path = parent_path.join(name);
 
-        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
-        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
+        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
-        let mode = unsafe {stat::Mode::from_bits_unchecked(mode &(!0x8000))};
+        let mode = stat::Mode::from_bits_truncate(mode);
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
         match open(&path, filtered_flags, mode) {
