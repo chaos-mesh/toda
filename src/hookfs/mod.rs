@@ -2,12 +2,13 @@ use anyhow::Result;
 use fuse::{FileAttr, FileType, Filesystem};
 use time::{get_time, Timespec};
 
-use libc::{getxattr};
+use libc::{getxattr, setxattr, listxattr, removexattr};
 
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
+use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
-use nix::unistd::{lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
+use nix::unistd::{unlink, mkdir, write, fsync, lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
 use nix::dir;
 
 use tracing::{debug, trace};
@@ -19,7 +20,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::cell::RefCell;
 use std::ffi::{OsStr, CString};
 
-use fuse::consts::{FOPEN_KEEP_CACHE, FOPEN_DIRECT_IO};
+use fuse::consts::FOPEN_DIRECT_IO;
 
 #[derive(Clone, Debug)]
 pub struct HookFs {
@@ -97,16 +98,16 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Option<FileAttr> {
 }
 
 impl Filesystem for HookFs {
-    #[tracing::instrument]
-    fn init(&mut self, req: &fuse::Request) -> Result<(), nix::libc::c_int> {
+    #[tracing::instrument(skip(_req))]
+    fn init(&mut self, _req: &fuse::Request) -> Result<(), nix::libc::c_int> {
         trace!("FUSE init");
         Ok(())
     }
-    #[tracing::instrument]
-    fn destroy(&mut self, req: &fuse::Request) {
+    #[tracing::instrument(skip(_req))]
+    fn destroy(&mut self, _req: &fuse::Request) {
         trace!("FUSE destroy");
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn lookup(
         &mut self,
         _req: &fuse::Request,
@@ -140,12 +141,12 @@ impl Filesystem for HookFs {
             }
         }
     }
-    #[tracing::instrument]
-    fn forget(&mut self, req: &fuse::Request, ino: u64, nlookup: u64) {
-        debug!("umimplemented forget");
+    #[tracing::instrument(skip(_req))]
+    fn forget(&mut self, _req: &fuse::Request, ino: u64, nlookup: u64) {
+        // Maybe hookfs doesn't need forget
     }
-    #[tracing::instrument]
-    fn getattr(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
+    #[tracing::instrument(skip(_req))]
+    fn getattr(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
         let time = get_time();
         let path = self.inode_map[&ino].as_path();
 
@@ -169,7 +170,7 @@ impl Filesystem for HookFs {
             }
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(req))]
     fn setattr(
         &mut self,
         req: &fuse::Request,
@@ -228,12 +229,13 @@ impl Filesystem for HookFs {
             reply.error(libc::ENOENT);
         }
     }
-    #[tracing::instrument]
-    fn readlink(&mut self, req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
+    #[tracing::instrument(skip(_req))]
+    fn readlink(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
         debug!("unimplimented");
+        
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(req))]
     fn mknod(
         &mut self,
         req: &fuse::Request,
@@ -269,41 +271,93 @@ impl Filesystem for HookFs {
         }
         self.lookup(req, parent, name, reply);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(req))]
     fn mkdir(
         &mut self,
-        _req: &fuse::Request,
-        _parent: u64,
-        _name: &std::ffi::OsStr,
-        _mode: u32,
+        req: &fuse::Request,
+        parent: u64,
+        name: &std::ffi::OsStr,
+        mode: u32,
         reply: fuse::ReplyEntry,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let path = self.original_path.join(name);
+        let mode = match stat::Mode::from_bits(mode) {
+            Some(mode) => mode,
+            None => {
+                debug!("unavailable mode: {}", mode);
+                reply.error(-1);
+                return
+            }
+        };
+        match mkdir(&path, mode) {
+            Ok(_) => {
+                self.lookup(req, parent, name, reply)
+            }
+            Err(err) => {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+
+                return
+            }
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn unlink(
         &mut self,
         _req: &fuse::Request,
         _parent: u64,
-        _name: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let path = self.original_path.join(name);
+        match unlink(&path) {
+            Ok(_) => {
+                reply.ok()
+            }
+            Err(err) => {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+
+                return
+            }
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn rmdir(
         &mut self,
         _req: &fuse::Request,
         _parent: u64,
-        _name: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let path = self.original_path.join(name);
+
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let ret = unsafe {libc::rmdir(path_ptr) };
+
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+        } else {
+            reply.ok();
+        }
+
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn symlink(
         &mut self,
         _req: &fuse::Request,
@@ -315,7 +369,7 @@ impl Filesystem for HookFs {
         debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn rename(
         &mut self,
         _req: &fuse::Request,
@@ -328,7 +382,7 @@ impl Filesystem for HookFs {
         debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn link(
         &mut self,
         _req: &fuse::Request,
@@ -340,7 +394,7 @@ impl Filesystem for HookFs {
         debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn open(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
@@ -360,7 +414,7 @@ impl Filesystem for HookFs {
                     self.files_counter += 1;
                     self.opened_files.insert(fh, fd);
 
-                    trace!("return with fh: {}, flags: {}", fh, filtered_flags.bits());
+                    trace!("return with fh: {}, flags: {}", fh, FOPEN_DIRECT_IO);
 
                     // TODO: force DIRECT_IO is not a great option
                     reply.opened(fh as u64, FOPEN_DIRECT_IO)
@@ -376,10 +430,10 @@ impl Filesystem for HookFs {
             reply.error(-1) // TODO: set errno to special value that no inode found
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn read(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         ino: u64,
         fh: u64,
         offset: i64,
@@ -395,6 +449,7 @@ impl Filesystem for HookFs {
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0);
+        
         if let Err(err) = read(fd, &mut buf) {
             trace!("return with err: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
@@ -404,33 +459,65 @@ impl Filesystem for HookFs {
         trace!("return with data: {:?}", buf);
         reply.data(&buf)
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn write(
         &mut self,
         _req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _data: &[u8],
+        fh: u64,
+        offset: i64,
+        data: &[u8],
         _flags: u32,
         reply: fuse::ReplyWrite,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        let fd = match self.opened_files.get(&(fh as usize)) {
+            Some(fd) => *fd,
+            None => {
+                trace!("cannot find fh {}", fh);
+                reply.error(-1);
+                return
+            }
+        };
+
+        if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        }
+
+        match write(fd, data) {
+            Ok(size) => {
+                reply.written(size as u32)
+            }
+            Err(err) => {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn flush(
         &mut self,
         _req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _lock_owner: u64,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        // flush is implemented with fsync. Is it the correct way?
+        if let Some(fd) = self.opened_files.get(&(fh as usize)) {
+            if let Err(err) = fsync(*fd) {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno)
+            } else {
+                reply.ok()
+            }
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn release(
         &mut self,
         _req: &fuse::Request,
@@ -444,20 +531,27 @@ impl Filesystem for HookFs {
         self.opened_files.remove(&(fh as usize));
         reply.ok();
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn fsync(
         &mut self,
         _req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        if let Some(fd) = self.opened_files.get(&(fh as usize)) {
+            if let Err(err) = fsync(*fd) {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno)
+            } else {
+                reply.ok()
+            }
+        }
     }
-    #[tracing::instrument]
-    fn opendir(&mut self, req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+    #[tracing::instrument(skip(_req))]
+    fn opendir(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
         let path = self.inode_map[&ino].as_path();
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
@@ -485,10 +579,10 @@ impl Filesystem for HookFs {
         trace!("return with fh: {}, flags: {}", id, flags);
         reply.opened(id as u64, flags);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn readdir(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         ino: u64,
         fh: u64,
         offset: i64,
@@ -538,10 +632,10 @@ impl Filesystem for HookFs {
         reply.ok();
         return;
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn releasedir(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         _ino: u64,
         fh: u64,
         _flags: u32,
@@ -550,10 +644,10 @@ impl Filesystem for HookFs {
         self.opened_dirs.remove(&(fh as usize));
         reply.ok();
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn fsyncdir(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _datasync: bool,
@@ -562,35 +656,98 @@ impl Filesystem for HookFs {
         debug!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
-    fn statfs(&mut self, req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
-        debug!("unimplemented");
-        reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
+    #[tracing::instrument(skip(_req))]
+    fn statfs(&mut self, _req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
+        match statfs::statfs(&self.original_path) {
+            Ok(stat) => {
+                // return f_bsize as f_frsize
+                // it's fine for linux in most case, but it's still better to fix it.
+                reply.statfs(stat.blocks(), stat.blocks_free(), stat.blocks_available(), stat.files(), stat.files_free(), stat.block_size() as u32, stat.maximum_name_length() as u32, stat.block_size() as u32);
+            }
+            Err(err) => {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn setxattr(
         &mut self,
         _req: &fuse::Request,
-        _ino: u64,
-        _name: &std::ffi::OsStr,
-        _value: &[u8],
-        _flags: u32,
+        ino: u64,
+        name: &std::ffi::OsStr,
+        value: &[u8],
+        flags: u32,
         _position: u32,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
+
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let name = match CString::new(name.as_bytes()) {
+            Ok(name) => name,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let value_ptr = &value[0] as *const u8 as *const libc::c_void;
+
+        let ret = unsafe {
+            setxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32)
+        };
+
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+
+            return
+        }
+        reply.ok()
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn getxattr(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         ino: u64,
         name: &std::ffi::OsStr,
         size: u32,
         reply: fuse::ReplyXattr,
     ) {
-        let path = self.inode_map[&ino].as_path();
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
@@ -640,24 +797,109 @@ impl Filesystem for HookFs {
             reply.data(buf.as_slice());
         }
     }
-    #[tracing::instrument]
-    fn listxattr(&mut self, req: &fuse::Request, _ino: u64, _size: u32, reply: fuse::ReplyXattr) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+    #[tracing::instrument(skip(_req))]
+    fn listxattr(&mut self, _req: &fuse::Request, ino: u64, size: u32, reply: fuse::ReplyXattr) {
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
+
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let mut buf = Vec::new();
+        buf.resize(size as usize, 0u8);
+        let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_char;
+
+        let ret = unsafe {
+            listxattr(path_ptr, buf_ptr, size as usize)
+        };
+
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+
+            return
+        }
+
+        if size == 0 {
+            debug!("may error because of 0 size in getxattr");
+            trace!("return with size {}", ret);
+            reply.size(ret as u32);
+        } else {
+            trace!("return with data {:?}", buf);
+            reply.data(buf.as_slice());
+        }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn removexattr(
         &mut self,
         _req: &fuse::Request,
-        _ino: u64,
-        _name: &std::ffi::OsStr,
+        ino: u64,
+        name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
+
+        let path = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let name = match CString::new(name.as_bytes()) {
+            Ok(name) => name,
+            Err(_) => {
+                // TODO: set better errno
+                // path contains nul
+                reply.error(-1);
+                return
+            }
+        };
+        let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+
+        let ret = unsafe {
+            removexattr(path_ptr, name_ptr)
+        };
+
+        if ret == -1 {
+            let err = nix::Error::last();
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+
+            return
+        }
+        reply.ok()
     }
-    #[tracing::instrument]
-    fn access(&mut self, req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
+    #[tracing::instrument(skip(_req))]
+    fn access(&mut self, _req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
         let path = self.inode_map[&ino].as_path();
         
         let mask = match AccessFlags::from_bits(mask as i32) {
@@ -676,7 +918,7 @@ impl Filesystem for HookFs {
             reply.ok()
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn create(
         &mut self,
         _req: &fuse::Request,
@@ -688,7 +930,7 @@ impl Filesystem for HookFs {
     ) {
         let path = self.original_path.join(name);
 
-        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000); // 0x8000 is magic
+        let filtered_flags = flags & (!(libc::O_APPEND as u32));
         let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
             Some(flags) => flags,
             None => {
@@ -697,6 +939,7 @@ impl Filesystem for HookFs {
             }
         };
 
+        trace!("create with flags: {:?}", filtered_flags);
         match open(&path, filtered_flags & OFlag::O_CREAT, stat::Mode::all()) {
             Ok(fd) => {
                 match stat::stat(&path) {
@@ -704,15 +947,16 @@ impl Filesystem for HookFs {
                         match convert_libc_stat_to_fuse_stat(stat) {
                             Some(stat) => {
                                 self.inode_map.insert(stat.ino, path);
-                                // TODO: support generation number
-                                // this can be implemented with ioctl FS_IOC_GETVERSION
-                                trace!("return with {:?}", stat);
 
                                 let time = get_time();
 
                                 let fh = self.files_counter;
                                 self.files_counter += 1;
                                 self.opened_files.insert(fh, fd);
+
+                                // TODO: support generation number
+                                // this can be implemented with ioctl FS_IOC_GETVERSION
+                                trace!("return with stat: {:?} fh: {}", stat, fh);
 
                                 reply.created(&time, &stat, 0, fh as u64, flags);
                             }
@@ -736,26 +980,26 @@ impl Filesystem for HookFs {
             }
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn getlk(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _lock_owner: u64,
-        _start: u64,
-        _end: u64,
-        _typ: u32,
-        _pid: u32,
+        start: u64,
+        end: u64,
+        typ: u32,
+        pid: u32,
         reply: fuse::ReplyLock,
     ) {
-        debug!("unimplemented");
+        // kernel will implement for hookfs
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn setlk(
         &mut self,
-        req: &fuse::Request,
+        _req: &fuse::Request,
         _ino: u64,
         _fh: u64,
         _lock_owner: u64,
@@ -766,10 +1010,10 @@ impl Filesystem for HookFs {
         _sleep: bool,
         reply: fuse::ReplyEmpty,
     ) {
-        debug!("unimplemented");
+        // kernel will implement for hookfs
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(_req))]
     fn bmap(
         &mut self,
         _req: &fuse::Request,
