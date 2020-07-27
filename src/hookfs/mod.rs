@@ -4,7 +4,7 @@ use time::{get_time, Timespec};
 
 use libc::{lgetxattr, lsetxattr, llistxattr, lremovexattr};
 
-use nix::fcntl::{open, OFlag};
+use nix::fcntl::{open, readlink, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
@@ -248,9 +248,37 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn readlink(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
-        debug!("unimplimented");
-        
-        reply.error(nix::libc::ENOSYS);
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
+
+        match readlink(path) {
+            Ok(path) => {
+                let path = match CString::new(path.as_os_str().as_bytes()) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        // TODO: set better errno
+                        // path contains nul
+                        reply.error(-1);
+                        return
+                    }
+                };
+
+                let data = path.as_bytes_with_nul();
+                trace!("reply with data: {:?}", data);
+                reply.data(data);
+            }
+            Err(err) => {
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        }
     }
     #[tracing::instrument(skip(req))]
     fn mknod(
@@ -486,6 +514,7 @@ impl Filesystem for HookFs {
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         if let Some(path) = self.inode_map.get(&ino) {
+            trace!("open with flags: {:?}", filtered_flags);
             match open(path, filtered_flags, stat::Mode::S_IRWXU) {
                 Ok(fd) => {
                     let fh = self.files_counter;
