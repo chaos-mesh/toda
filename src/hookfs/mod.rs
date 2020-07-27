@@ -2,13 +2,13 @@ use anyhow::Result;
 use fuse::{FileAttr, FileType, Filesystem};
 use time::{get_time, Timespec};
 
-use libc::{getxattr, setxattr, listxattr, removexattr};
+use libc::{lgetxattr, lsetxattr, llistxattr, lremovexattr};
 
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
-use nix::unistd::{unlink, mkdir, write, fsync, lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
+use nix::unistd::{LinkatFlags, linkat, symlinkat, unlink, mkdir, write, fsync, lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
 use nix::dir;
 
 use tracing::{debug, trace};
@@ -125,7 +125,7 @@ impl Filesystem for HookFs {
             },
         };
         let path = parent_path.join(name);
-        match stat::stat(&path) {
+        match stat::lstat(&path) {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
                     Some(stat) => {
@@ -155,10 +155,12 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn getattr(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyAttr) {
+        trace!("getattr");
+
         let time = get_time();
         let path = self.inode_map[&ino].as_path();
 
-        match stat::stat(path) {
+        match stat::lstat(path) {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
                     Some(stat) => {
@@ -196,6 +198,8 @@ impl Filesystem for HookFs {
         _flags: Option<u32>,
         reply: fuse::ReplyAttr,
     ) {
+        trace!("setattr");
+
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -399,17 +403,33 @@ impl Filesystem for HookFs {
         }
 
     }
-    #[tracing::instrument(skip(_req))]
+    #[tracing::instrument(skip(req))]
     fn symlink(
         &mut self,
-        _req: &fuse::Request,
-        _parent: u64,
-        _name: &std::ffi::OsStr,
-        _link: &std::path::Path,
+        req: &fuse::Request,
+        parent: u64,
+        name: &std::ffi::OsStr,
+        link: &std::path::Path,
         reply: fuse::ReplyEntry,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
+
+        trace!("create symlink: {} => {}", path.display(), link.display());
+        if let Err(err) = symlinkat(link, None, &path) {
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        }
+
+        self.lookup(req, parent, name, reply);
     }
     #[tracing::instrument(skip(_req))]
     fn rename(
@@ -424,17 +444,39 @@ impl Filesystem for HookFs {
         debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
-    #[tracing::instrument(skip(_req))]
+    #[tracing::instrument(skip(req))]
     fn link(
         &mut self,
-        _req: &fuse::Request,
-        _ino: u64,
-        _newparent: u64,
-        _newname: &std::ffi::OsStr,
+        req: &fuse::Request,
+        ino: u64,
+        newparent: u64,
+        newname: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
-        debug!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        let original_path =  match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+
+        let new_parent_path = match self.inode_map.get(&newparent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let new_path = new_parent_path.join(newname);
+
+        if let Err(err) = linkat(None, original_path, None, &new_path, LinkatFlags::NoSymlinkFollow) {
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        }
+        self.lookup(req, newparent, newname, reply);
     }
     #[tracing::instrument(skip(_req))]
     fn open(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
@@ -748,7 +790,7 @@ impl Filesystem for HookFs {
         let value_ptr = &value[0] as *const u8 as *const libc::c_void;
 
         let ret = unsafe {
-            setxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32)
+            lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32)
         };
 
         if ret == -1 {
@@ -770,6 +812,7 @@ impl Filesystem for HookFs {
         size: u32,
         reply: fuse::ReplyXattr,
     ) {
+        trace!("getxattr");
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -782,6 +825,7 @@ impl Filesystem for HookFs {
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
+                debug!("return because path is invalid");
                 // TODO: set better errno
                 // path contains nul
                 reply.error(-1);
@@ -793,8 +837,9 @@ impl Filesystem for HookFs {
         let name = match CString::new(name.as_bytes()) {
             Ok(name) => name,
             Err(_) => {
+                debug!("return because name is invalid");
                 // TODO: set better errno
-                // path contains nul
+                // name contains nul
                 reply.error(-1);
                 return
             }
@@ -806,7 +851,7 @@ impl Filesystem for HookFs {
         let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_void;
 
         let ret = unsafe {
-            getxattr(path_ptr, name_ptr, buf_ptr, size as usize)
+            lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize)
         };
 
         if ret == -1 {
@@ -854,7 +899,7 @@ impl Filesystem for HookFs {
         let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_char;
 
         let ret = unsafe {
-            listxattr(path_ptr, buf_ptr, size as usize)
+            llistxattr(path_ptr, buf_ptr, size as usize)
         };
 
         if ret == -1 {
@@ -915,7 +960,7 @@ impl Filesystem for HookFs {
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let ret = unsafe {
-            removexattr(path_ptr, name_ptr)
+            lremovexattr(path_ptr, name_ptr)
         };
 
         if ret == -1 {
@@ -975,7 +1020,7 @@ impl Filesystem for HookFs {
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
         match open(&path, filtered_flags, mode) {
             Ok(fd) => {
-                match stat::stat(&path) {
+                match stat::lstat(&path) {
                     Ok(stat) => {
                         match convert_libc_stat_to_fuse_stat(stat) {
                             Some(stat) => {
