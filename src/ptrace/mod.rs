@@ -113,11 +113,13 @@ impl TracedThread {
             ptrace::setregs(pid, regs)?;
 
             // We only support x86-64 platform now, so using hard coded `LittleEndian` here is ok.
-            ptrace::write(
-                pid,
-                cur_ins_ptr as *mut libc::c_void,
-                0x050f as *mut libc::c_void,
-            )?;
+            unsafe {
+                ptrace::write(
+                    pid,
+                    cur_ins_ptr as *mut libc::c_void,
+                    0x050f as *mut libc::c_void,
+                )?
+            };
             ptrace::step(pid, None)?;
             let _ = wait::waitpid(pid, None)?;
             // TODO: check wait result
@@ -207,12 +209,14 @@ struct ThreadGuard {
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
         let pid = Pid::from_raw(self.tid);
-        ptrace::write(
-            pid,
-            self.regs.rip as *mut libc::c_void,
-            self.rip_ins as *mut libc::c_void,
-        )
-        .unwrap();
+        unsafe {
+            ptrace::write(
+                pid,
+                self.regs.rip as *mut libc::c_void,
+                self.rip_ins as *mut libc::c_void,
+            )
+            .unwrap();
+        }
         ptrace::setregs(pid, self.regs).unwrap();
     }
 }
