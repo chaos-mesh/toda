@@ -20,7 +20,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::cell::RefCell;
 use std::ffi::{OsStr, CString};
 
-use fuse::consts::FOPEN_DIRECT_IO;
+// use fuse::consts::FOPEN_DIRECT_IO;
 
 #[derive(Clone, Debug)]
 pub struct HookFs {
@@ -111,13 +111,20 @@ impl Filesystem for HookFs {
     fn lookup(
         &mut self,
         _req: &fuse::Request,
-        _parent: u64,
+        parent: u64,
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
         let time = get_time();
 
-        let path = self.original_path.join(name);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
         match stat::stat(&path) {
             Ok(stat) => {
                 match convert_libc_stat_to_fuse_stat(stat) {
@@ -143,6 +150,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn forget(&mut self, _req: &fuse::Request, ino: u64, nlookup: u64) {
+        trace!("forget not implemented yet");
         // Maybe hookfs doesn't need forget
     }
     #[tracing::instrument(skip(_req))]
@@ -188,46 +196,51 @@ impl Filesystem for HookFs {
         _flags: Option<u32>,
         reply: fuse::ReplyAttr,
     ) {
-        if let Some(path) = self.inode_map.get(&ino) {
-            if let Err(err) = chown(path, uid.map(|uid| Uid::from_raw(uid)), gid.map(|gid| Gid::from_raw(gid))) {
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path.as_path(),
+            None => {
+                debug!("cannot find inode({}) in inode_map", ino);
+                reply.error(-1);
+                return
+            }
+        };
+
+        if let Err(err) = chown(path, uid.map(|uid| Uid::from_raw(uid)), gid.map(|gid| Gid::from_raw(gid))) {
+            trace!("return with error: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno);
+            return;
+        }
+        if let Some(mode) = mode {
+            if let Err(err) = stat::fchmodat(None, path, unsafe {stat::Mode::from_bits_unchecked(mode)}, stat::FchmodatFlags::FollowSymlink) {
                 trace!("return with error: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
                 return;
             }
-            if let Some(mode) = mode {
-                if let Err(err) = stat::fchmodat(None, path, unsafe {stat::Mode::from_bits_unchecked(mode)}, stat::FchmodatFlags::FollowSymlink) {
-                    trace!("return with error: {}", err);
-                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                    reply.error(errno);
-                    return;
-                }
-            }
-            if let Some(size) = size {
-                if let Err(err) = truncate(path, size as i64) {
-                    trace!("return with error: {}", err);
-                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                    reply.error(errno);
-                    return;
-                }
-            }
-
-            if let (Some(atime), Some(mtime)) = (atime, mtime) {
-                let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
-                let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
-                // TODO: check whether one of them is Some
-                if let Err(err) = stat::utimes(path, &atime, &mtime) {
-                    trace!("return with error: {}", err);
-                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                    reply.error(errno);
-                    return;
-                }
-            }
-            
-            self.getattr(req, ino, reply)
-        } else {
-            reply.error(libc::ENOENT);
         }
+        if let Some(size) = size {
+            if let Err(err) = truncate(path, size as i64) {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        }
+
+        if let (Some(atime), Some(mtime)) = (atime, mtime) {
+            let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
+            let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
+            // TODO: check whether one of them is Some
+            if let Err(err) = stat::utimes(path, &atime, &mtime) {
+                trace!("return with error: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno);
+                return;
+            }
+        }
+        
+        self.getattr(req, ino, reply)
     }
     #[tracing::instrument(skip(_req))]
     fn readlink(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
@@ -245,7 +258,14 @@ impl Filesystem for HookFs {
         rdev: u32,
         reply: fuse::ReplyEntry,
     ) {
-        let path = self.original_path.join(name);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
@@ -280,7 +300,15 @@ impl Filesystem for HookFs {
         mode: u32,
         reply: fuse::ReplyEntry,
     ) {
-        let path = self.original_path.join(name);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
+
         let mode = match stat::Mode::from_bits(mode) {
             Some(mode) => mode,
             None => {
@@ -306,11 +334,18 @@ impl Filesystem for HookFs {
     fn unlink(
         &mut self,
         _req: &fuse::Request,
-        _parent: u64,
+        parent: u64,
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        let path = self.original_path.join(name);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
         match unlink(&path) {
             Ok(_) => {
                 reply.ok()
@@ -328,11 +363,18 @@ impl Filesystem for HookFs {
     fn rmdir(
         &mut self,
         _req: &fuse::Request,
-        _parent: u64,
+        parent: u64,
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
-        let path = self.original_path.join(name);
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
+            None => {
+                reply.error(-1);
+                return;
+            },
+        };
+        let path = parent_path.join(name);
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
@@ -399,25 +441,19 @@ impl Filesystem for HookFs {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000); // 0x8000 is magic
-        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
-            Some(flags) => flags,
-            None => {
-                reply.error(-1); // TODO: set errno to unknown flags
-                return;
-            }
-        };
+        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
 
         if let Some(path) = self.inode_map.get(&ino) {
-            match open(path, filtered_flags, stat::Mode::all()) {
+            match open(path, filtered_flags, stat::Mode::S_IRWXU) {
                 Ok(fd) => {
                     let fh = self.files_counter;
                     self.files_counter += 1;
                     self.opened_files.insert(fh, fd);
 
-                    trace!("return with fh: {}, flags: {}", fh, FOPEN_DIRECT_IO);
+                    trace!("return with fh: {}, flags: {}", fh, 0);
 
                     // TODO: force DIRECT_IO is not a great option
-                    reply.opened(fh as u64, FOPEN_DIRECT_IO)
+                    reply.opened(fh as u64, 0)
                 }
                 Err(err) => {
                     trace!("return with err: {}", err);
@@ -555,15 +591,9 @@ impl Filesystem for HookFs {
         let path = self.inode_map[&ino].as_path();
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
-        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
-            Some(flags) => flags,
-            None => {
-                reply.error(-1); // TODO: set errno to unknown flags
-                return;
-            }
-        };
+        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
         
-        let dir = match dir::Dir::open(path, filtered_flags, stat::Mode::all()) {
+        let dir = match dir::Dir::open(path, filtered_flags, stat::Mode::S_IRWXU) {
             Ok(dir) => dir,
             Err(err) => {
                 trace!("return with error: {}", err);
@@ -922,25 +952,28 @@ impl Filesystem for HookFs {
     fn create(
         &mut self,
         _req: &fuse::Request,
-        _parent: u64,
+        parent: u64,
         name: &std::ffi::OsStr,
-        _mode: u32,
+        mode: u32,
         flags: u32,
         reply: fuse::ReplyCreate,
     ) {
-        let path = self.original_path.join(name);
-
-        let filtered_flags = flags & (!(libc::O_APPEND as u32));
-        let filtered_flags = match OFlag::from_bits(filtered_flags as i32) {
-            Some(flags) => flags,
+        let parent_path = match self.inode_map.get(&parent) {
+            Some(path) => path.as_path(),
             None => {
-                reply.error(-1); // TODO: set errno to unknown flags
+                reply.error(-1);
                 return;
-            }
+            },
         };
+        let path = parent_path.join(name);
 
-        trace!("create with flags: {:?}", filtered_flags);
-        match open(&path, filtered_flags & OFlag::O_CREAT, stat::Mode::all()) {
+        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!0x8000);
+        let filtered_flags = unsafe {OFlag::from_bits_unchecked(filtered_flags as i32)};
+
+        let mode = unsafe {stat::Mode::from_bits_unchecked(mode &(!0x8000))};
+
+        trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
+        match open(&path, filtered_flags, mode) {
             Ok(fd) => {
                 match stat::stat(&path) {
                     Ok(stat) => {
