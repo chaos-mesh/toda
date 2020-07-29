@@ -113,6 +113,24 @@ impl Lock {
     pub fn _new(start: u64, end: u64, typ: u32, pid: u32) -> Self { Self { start, end, typ, pid } }
 }
 
+#[derive(Debug)]
+pub enum Xattr {
+    Data {
+        data: Vec<u8>,
+    },
+    Size {
+        size: u32,
+    }
+}
+impl Xattr {
+    pub fn data(data: Vec<u8>) -> Self {
+        Xattr::Data {data}
+    }
+    pub fn size(size: u32) -> Self {
+        Xattr::Size {size}
+    }
+}
+
 
 pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
@@ -199,6 +217,19 @@ impl FsReply<Create> for ReplyCreate {
 impl FsReply<Lock> for ReplyLock {
     fn reply_ok(self, item: Lock) {
         self.locked(item.start, item.end, item.typ, item.pid);
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<Xattr> for ReplyXattr {
+    fn reply_ok(self, item: Xattr) {
+        use Xattr::*;
+        match item {
+            Data {data} => self.data(data.as_slice()),
+            Size {size} => self.size(size),
+        }
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);

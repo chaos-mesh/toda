@@ -635,36 +635,15 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
     #[tracing::instrument]
-    async fn getxattr(&self, ino: u64, name: OsString, size: u32, reply: ReplyXattr) {
+    async fn getxattr(&self, ino: u64, name: OsString, size: u32) -> Result<Xattr> {
         trace!("getxattr");
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path,
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map.get(&ino).ok_or(Error::InodeNotFound{inode: ino})?;
 
-        let path = match CString::new(path.as_os_str().as_bytes()) {
-            Ok(path) => path,
-            Err(_) => {
-                debug!("converting path to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
-        let name = match CString::new(name.as_bytes()) {
-            Ok(name) => name,
-            Err(_) => {
-                debug!("converting name to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let name = CString::new(name.as_bytes())?;
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let mut buf = Vec::new();
@@ -674,43 +653,24 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
-            let err = nix::Error::last();
-            trace!("return with err: {}", err);
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-
-            return;
+            return Err(Error::from(nix::Error::last()))
         }
 
         if size == 0 {
             trace!("return with size {}", ret);
-            reply.size(ret as u32);
+            Ok(Xattr::size(ret as u32))
         } else {
             trace!("return with data {:?}", buf);
-            reply.data(buf.as_slice());
+            Ok(Xattr::data(buf))
         }
     }
     #[tracing::instrument]
-    async fn listxattr(&self, ino: u64, size: u32, reply: ReplyXattr) {
+    async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
         trace!("listxattr");
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path,
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map.get(&ino).ok_or(Error::InodeNotFound{inode: ino})?;
 
-        let path = match CString::new(path.as_os_str().as_bytes()) {
-            Ok(path) => path,
-            Err(_) => {
-                debug!("converting path to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let mut buf = Vec::new();
@@ -720,20 +680,13 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { llistxattr(path_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
-            let err = nix::Error::last();
-            trace!("return with err: {}", err);
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-
-            return;
+            return Err(Error::from(nix::Error::last()))
         }
 
         if size == 0 {
-            trace!("return with size {}", ret);
-            reply.size(ret as u32);
+            Ok(Xattr::size(ret as u32))
         } else {
-            trace!("return with data {:?}", buf);
-            reply.data(buf.as_slice());
+            Ok(Xattr::data(buf))
         }
     }
     #[tracing::instrument]

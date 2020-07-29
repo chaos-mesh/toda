@@ -103,9 +103,9 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         position: u32,
     ) -> Result<()>;
 
-    async fn getxattr(&self, ino: u64, name: OsString, size: u32, reply: ReplyXattr);
+    async fn getxattr(&self, ino: u64, name: OsString, size: u32) -> Result<Xattr>;
 
-    async fn listxattr(&self, ino: u64, size: u32, reply: ReplyXattr);
+    async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr>;
 
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()>;
 
@@ -442,14 +442,14 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.inner.clone();
         let name = name.to_owned();
-        self.thread_pool.spawn(async move {
-            async_impl.getxattr(ino, name, size, reply).await;
+        self.spawn(reply, async move {
+            async_impl.getxattr(ino, name, size).await
         });
     }
     fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl.listxattr(ino, size, reply).await;
+        self.spawn(reply, async move {
+            async_impl.listxattr(ino, size).await
         });
     }
     fn removexattr(&mut self, _req: &Request, ino: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
