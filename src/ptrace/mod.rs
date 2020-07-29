@@ -92,7 +92,7 @@ impl TracedThread {
     #[tracing::instrument]
     fn syscall(&self, id: u64, args: &[u64]) -> Result<u64> {
         trace!("run syscall {} {:?}", id, args);
-        
+
         return self.with_protect(|thread| -> Result<u64> {
             let pid = Pid::from_raw(thread.tid);
 

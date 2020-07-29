@@ -15,8 +15,8 @@ use tracing::{info, Level};
 use tracing_subscriber;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, Arc};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -36,18 +36,22 @@ fn main() -> Result<()> {
 
     let verbose = Level::from_str(&option.verbose)?;
 
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(verbose)
-        .finish();
+    let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
-    let injection = Arc::new(Mutex::new(Injection::create_injection(option.path, option.pid)?));
+    let injection = Arc::new(Mutex::new(Injection::create_injection(
+        option.path,
+        option.pid,
+    )?));
     let mount_injection = injection.clone();
 
-    namespace::with_mnt_namespace(box move || -> Result<()> {
-        mount_injection.lock().unwrap().mount()?;
-        return Ok(())
-    }, option.pid)?;
+    namespace::with_mnt_namespace(
+        box move || -> Result<()> {
+            mount_injection.lock().unwrap().mount()?;
+            return Ok(());
+        },
+        option.pid,
+    )?;
 
     injection.lock().unwrap().reopen()?;
 
@@ -59,10 +63,13 @@ fn main() -> Result<()> {
 
     injection.lock().unwrap().reopen()?;
     let mount_injection = injection.clone();
-    namespace::with_mnt_namespace(box move || -> Result<()> {
-        mount_injection.lock().unwrap().recover_mount()?;
-        return Ok(())
-    }, option.pid)?;
+    namespace::with_mnt_namespace(
+        box move || -> Result<()> {
+            mount_injection.lock().unwrap().recover_mount()?;
+            return Ok(());
+        },
+        option.pid,
+    )?;
     info!("recover successfully");
     return Ok(());
 }

@@ -2,23 +2,26 @@ use anyhow::Result;
 use fuse::{FileAttr, FileType, Filesystem};
 use time::{get_time, Timespec};
 
-use libc::{lgetxattr, lsetxattr, llistxattr, lremovexattr};
+use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
 
+use nix::dir;
 use nix::fcntl::{open, readlink, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
-use nix::unistd::{LinkatFlags, linkat, symlinkat, unlink, mkdir, write, fsync, lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
-use nix::dir;
+use nix::unistd::{
+    chown, fsync, linkat, lseek, mkdir, read, symlinkat, truncate, unlink, write, AccessFlags, Gid,
+    LinkatFlags, Uid, Whence,
+};
 
-use tracing::{debug, trace, error};
+use tracing::{debug, error, trace};
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::{CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
-use std::os::unix::ffi::OsStrExt;
-use std::cell::RefCell;
-use std::ffi::{OsStr, CString};
 
 // use fuse::consts::FOPEN_DIRECT_IO;
 
@@ -121,9 +124,10 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
         match stat::lstat(&path) {
@@ -137,8 +141,8 @@ impl Filesystem for HookFs {
                         reply.entry(&time, &stat, 0);
                     }
                     None => {
-                        trace!("return with errno: -1");
-                        reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
+                        error!("return with unknown file type {}", stat.st_mode & libc::S_IFMT);
+                        reply.error(libc::EINVAL)
                     }
                 }
             }
@@ -162,18 +166,16 @@ impl Filesystem for HookFs {
         let path = self.inode_map[&ino].as_path();
 
         match stat::lstat(path) {
-            Ok(stat) => {
-                match convert_libc_stat_to_fuse_stat(stat) {
-                    Some(stat) => {
-                        trace!("return with {:?}", stat);
-                        reply.attr(&time, &stat)
-                    }
-                    None => {
-                        trace!("return with errno: -1");
-                        reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
-                    }
+            Ok(stat) => match convert_libc_stat_to_fuse_stat(stat) {
+                Some(stat) => {
+                    trace!("return with {:?}", stat);
+                    reply.attr(&time, &stat)
                 }
-            }
+                None => {
+                    error!("return with unknown file type {}", stat.st_mode & libc::S_IFMT);
+                    reply.error(libc::EINVAL)
+                }
+            },
             Err(err) => {
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 trace!("return with errno: {}", errno);
@@ -205,19 +207,28 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
-        if let Err(err) = chown(path, uid.map(|uid| Uid::from_raw(uid)), gid.map(|gid| Gid::from_raw(gid))) {
+        if let Err(err) = chown(
+            path,
+            uid.map(|uid| Uid::from_raw(uid)),
+            gid.map(|gid| Gid::from_raw(gid)),
+        ) {
             trace!("return with error: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
             return;
         }
         if let Some(mode) = mode {
-            if let Err(err) = stat::fchmodat(None, path,  stat::Mode::from_bits_truncate(mode), stat::FchmodatFlags::FollowSymlink) {
+            if let Err(err) = stat::fchmodat(
+                None,
+                path,
+                stat::Mode::from_bits_truncate(mode),
+                stat::FchmodatFlags::FollowSymlink,
+            ) {
                 trace!("return with error: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
@@ -244,7 +255,7 @@ impl Filesystem for HookFs {
                 return;
             }
         }
-        
+
         self.getattr(req, ino, reply)
     }
     #[tracing::instrument(skip(_req))]
@@ -254,8 +265,8 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
@@ -264,10 +275,9 @@ impl Filesystem for HookFs {
                 let path = match CString::new(path.as_os_str().as_bytes()) {
                     Ok(path) => path,
                     Err(_) => {
-                        // TODO: set better errno
-                        // path contains nul
-                        reply.error(-1);
-                        return
+                        debug!("converting path to CString failed");
+                        reply.error(libc::EINVAL);
+                        return;
                     }
                 };
 
@@ -296,33 +306,31 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const i8;
 
         trace!("mknod for {:?}", path);
-        let ret = unsafe {
-            libc::mknod(path_ptr, mode, rdev as u64)
-        };
+        let ret = unsafe { libc::mknod(path_ptr, mode, rdev as u64) };
         if ret == -1 {
             let err = nix::Error::last();
             trace!("return with err: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
 
-            return
+            return;
         }
         self.lookup(req, parent, name, reply);
     }
@@ -339,30 +347,22 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
 
-        let mode = match stat::Mode::from_bits(mode) {
-            Some(mode) => mode,
-            None => {
-                error!("unavailable mode: {}", mode);
-                reply.error(-1);
-                return
-            }
-        };
+        let mode = stat::Mode::from_bits_truncate(mode);
         match mkdir(&path, mode) {
-            Ok(_) => {
-                self.lookup(req, parent, name, reply)
-            }
+            Ok(_) => self.lookup(req, parent, name, reply),
             Err(err) => {
                 trace!("return with err: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
 
-                return
+                return;
             }
         }
     }
@@ -378,21 +378,20 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
         match unlink(&path) {
-            Ok(_) => {
-                reply.ok()
-            }
+            Ok(_) => reply.ok(),
             Err(err) => {
                 trace!("return with err: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
                 reply.error(errno);
 
-                return
+                return;
             }
         }
     }
@@ -408,24 +407,24 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
-        let ret = unsafe {libc::rmdir(path_ptr) };
+        let ret = unsafe { libc::rmdir(path_ptr) };
 
         if ret == -1 {
             let err = nix::Error::last();
@@ -435,7 +434,6 @@ impl Filesystem for HookFs {
         } else {
             reply.ok();
         }
-
     }
     #[tracing::instrument(skip(req))]
     fn symlink(
@@ -450,9 +448,10 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
 
@@ -490,24 +489,32 @@ impl Filesystem for HookFs {
         reply: fuse::ReplyEntry,
     ) {
         trace!("link");
-        let original_path =  match self.inode_map.get(&ino) {
+        let original_path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", ino);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
 
         let new_parent_path = match self.inode_map.get(&newparent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", newparent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let new_path = new_parent_path.join(newname);
 
-        if let Err(err) = linkat(None, original_path, None, &new_path, LinkatFlags::NoSymlinkFollow) {
+        if let Err(err) = linkat(
+            None,
+            original_path,
+            None,
+            &new_path,
+            LinkatFlags::NoSymlinkFollow,
+        ) {
             trace!("return with err: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
@@ -523,28 +530,32 @@ impl Filesystem for HookFs {
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
-        if let Some(path) = self.inode_map.get(&ino) {
-            trace!("open with flags: {:?}", filtered_flags);
-            match open(path, filtered_flags, stat::Mode::S_IRWXU) {
-                Ok(fd) => {
-                    let fh = self.files_counter;
-                    self.files_counter += 1;
-                    self.opened_files.insert(fh, fd);
-
-                    trace!("return with fh: {}, flags: {}", fh, 0);
-
-                    // TODO: force DIRECT_IO is not a great option
-                    reply.opened(fh as u64, 0)
-                }
-                Err(err) => {
-                    trace!("return with err: {}", err);
-                    let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                    reply.error(errno)
-                }
+        let path = match self.inode_map.get(&ino) {
+            Some(path) => path,
+            None => {
+                error!("cannot find inode({}) in inode_map", ino);
+                reply.error(libc::EFAULT);
+                return;
             }
-        } else {
-            trace!("return with errno: -1");
-            reply.error(-1) // TODO: set errno to special value that no inode found
+        };
+
+        trace!("open with flags: {:?}", filtered_flags);
+        match open(path, filtered_flags, stat::Mode::S_IRWXU) {
+            Ok(fd) => {
+                let fh = self.files_counter;
+                self.files_counter += 1;
+                self.opened_files.insert(fh, fd);
+
+                trace!("return with fh: {}, flags: {}", fh, 0);
+
+                // TODO: force DIRECT_IO is not a great option
+                reply.opened(fh as u64, 0)
+            }
+            Err(err) => {
+                trace!("return with err: {}", err);
+                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+                reply.error(errno)
+            }
         }
     }
     #[tracing::instrument(skip(_req))]
@@ -567,7 +578,7 @@ impl Filesystem for HookFs {
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0);
-        
+
         if let Err(err) = read(fd, &mut buf) {
             trace!("return with err: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
@@ -592,9 +603,9 @@ impl Filesystem for HookFs {
         let fd = match self.opened_files.get(&(fh as usize)) {
             Some(fd) => *fd,
             None => {
-                trace!("cannot find fh {}", fh);
-                reply.error(-1);
-                return
+                trace!("cannot find fh {} in opened_files", fh);
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
@@ -605,9 +616,7 @@ impl Filesystem for HookFs {
         }
 
         match write(fd, data) {
-            Ok(size) => {
-                reply.written(size as u32)
-            }
+            Ok(size) => reply.written(size as u32),
             Err(err) => {
                 trace!("return with err: {}", err);
                 let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
@@ -627,16 +636,20 @@ impl Filesystem for HookFs {
     ) {
         trace!("flush");
         // flush is implemented with fsync. Is it the correct way?
-        if let Some(fd) = self.opened_files.get(&(fh as usize)) {
-            if let Err(err) = fsync(*fd) {
-                trace!("return with err: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno)
-            } else {
-                reply.ok()
+        let fd = match self.opened_files.get(&(fh as usize)) {
+            Some(fd) => *fd,
+            None => {
+                trace!("cannot find fh {} in opened_files", fh);
+                reply.error(libc::EFAULT);
+                return;
             }
+        };
+        if let Err(err) = fsync(fd) {
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno)
         } else {
-            reply.error(-1)
+            reply.ok()
         }
     }
     #[tracing::instrument(skip(_req))]
@@ -664,16 +677,21 @@ impl Filesystem for HookFs {
         reply: fuse::ReplyEmpty,
     ) {
         trace!("fsync");
-        if let Some(fd) = self.opened_files.get(&(fh as usize)) {
-            if let Err(err) = fsync(*fd) {
-                trace!("return with err: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno)
-            } else {
-                reply.ok()
+        let fd = match self.opened_files.get(&(fh as usize)) {
+            Some(fd) => *fd,
+            None => {
+                trace!("cannot find fh {} in opened_files", fh);
+                reply.error(libc::EFAULT);
+                return;
             }
+        };
+        
+        if let Err(err) = fsync(fd) {
+            trace!("return with err: {}", err);
+            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
+            reply.error(errno)
         } else {
-            reply.error(-1)
+            reply.ok()
         }
     }
     #[tracing::instrument(skip(_req))]
@@ -683,7 +701,7 @@ impl Filesystem for HookFs {
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
-        
+
         let dir = match dir::Dir::open(path, filtered_flags, stat::Mode::S_IRWXU) {
             Ok(dir) => dir,
             Err(err) => {
@@ -729,8 +747,8 @@ impl Filesystem for HookFs {
                     let file_type = match entry.file_type() {
                         Some(file_type) => convert_filetype(file_type),
                         None => {
-                            debug!("unknown file_type");
-                            reply.error(-1);
+                            debug!("unknown file type {:?}", entry.file_type());
+                            reply.error(libc::EINVAL);
                             return;
                         }
                     };
@@ -786,7 +804,16 @@ impl Filesystem for HookFs {
             Ok(stat) => {
                 // return f_bsize as f_frsize
                 // it's fine for linux in most case, but it's still better to fix it.
-                reply.statfs(stat.blocks(), stat.blocks_free(), stat.blocks_available(), stat.files(), stat.files_free(), stat.block_size() as u32, stat.maximum_name_length() as u32, stat.block_size() as u32);
+                reply.statfs(
+                    stat.blocks(),
+                    stat.blocks_free(),
+                    stat.blocks_available(),
+                    stat.files(),
+                    stat.files_free(),
+                    stat.block_size() as u32,
+                    stat.maximum_name_length() as u32,
+                    stat.block_size() as u32,
+                );
             }
             Err(err) => {
                 trace!("return with error: {}", err);
@@ -813,18 +840,17 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -832,19 +858,16 @@ impl Filesystem for HookFs {
         let name = match CString::new(name.as_bytes()) {
             Ok(name) => name,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting name to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let value_ptr = &value[0] as *const u8 as *const libc::c_void;
 
-        let ret = unsafe {
-            lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32)
-        };
+        let ret = unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
 
         if ret == -1 {
             let err = nix::Error::last();
@@ -852,7 +875,7 @@ impl Filesystem for HookFs {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
 
-            return
+            return;
         }
         reply.ok()
     }
@@ -870,19 +893,17 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                debug!("return because path is invalid");
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -890,11 +911,9 @@ impl Filesystem for HookFs {
         let name = match CString::new(name.as_bytes()) {
             Ok(name) => name,
             Err(_) => {
-                debug!("return because name is invalid");
-                // TODO: set better errno
-                // name contains nul
-                reply.error(-1);
-                return
+                debug!("converting name to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -903,9 +922,7 @@ impl Filesystem for HookFs {
         buf.resize(size as usize, 0u8);
         let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_void;
 
-        let ret = unsafe {
-            lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize)
-        };
+        let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
             let err = nix::Error::last();
@@ -913,7 +930,7 @@ impl Filesystem for HookFs {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
 
-            return
+            return;
         }
 
         if size == 0 {
@@ -931,18 +948,17 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -951,9 +967,7 @@ impl Filesystem for HookFs {
         buf.resize(size as usize, 0u8);
         let buf_ptr = buf.as_mut_slice() as *mut [u8] as *mut libc::c_char;
 
-        let ret = unsafe {
-            llistxattr(path_ptr, buf_ptr, size as usize)
-        };
+        let ret = unsafe { llistxattr(path_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
             let err = nix::Error::last();
@@ -961,7 +975,7 @@ impl Filesystem for HookFs {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
 
-            return
+            return;
         }
 
         if size == 0 {
@@ -985,18 +999,17 @@ impl Filesystem for HookFs {
             Some(path) => path.as_path(),
             None => {
                 error!("cannot find inode({}) in inode_map", ino);
-                reply.error(-1);
-                return
+                reply.error(libc::EFAULT);
+                return;
             }
         };
 
         let path = match CString::new(path.as_os_str().as_bytes()) {
             Ok(path) => path,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting path to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -1004,17 +1017,14 @@ impl Filesystem for HookFs {
         let name = match CString::new(name.as_bytes()) {
             Ok(name) => name,
             Err(_) => {
-                // TODO: set better errno
-                // path contains nul
-                reply.error(-1);
-                return
+                debug!("converting name to CString failed");
+                reply.error(libc::EINVAL);
+                return;
             }
         };
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
-        let ret = unsafe {
-            lremovexattr(path_ptr, name_ptr)
-        };
+        let ret = unsafe { lremovexattr(path_ptr, name_ptr) };
 
         if ret == -1 {
             let err = nix::Error::last();
@@ -1022,7 +1032,7 @@ impl Filesystem for HookFs {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
             reply.error(errno);
 
-            return
+            return;
         }
         reply.ok()
     }
@@ -1030,15 +1040,8 @@ impl Filesystem for HookFs {
     fn access(&mut self, _req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
         trace!("access");
         let path = self.inode_map[&ino].as_path();
-        
-        let mask = match AccessFlags::from_bits(mask as i32) {
-            Some(mask) => mask,
-            None => {
-                trace!("unknown mask {}", mask);
-                reply.error(-1);
-                return
-            }
-        };
+
+        let mask = AccessFlags::from_bits_truncate(mask as i32);
         if let Err(err) = nix::unistd::access(path, mask) {
             trace!("return with error: {}", err);
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
@@ -1061,9 +1064,10 @@ impl Filesystem for HookFs {
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
-                reply.error(-1);
+                error!("cannot find inode({}) in inode_map", parent);
+                reply.error(libc::EFAULT);
                 return;
-            },
+            }
         };
         let path = parent_path.join(name);
 
@@ -1094,8 +1098,8 @@ impl Filesystem for HookFs {
                                 reply.created(&time, &stat, 0, fh as u64, flags);
                             }
                             None => {
-                                trace!("return with errno: -1");
-                                reply.error(-1) // TODO: set it with UNKNOWN FILE TYPE errno
+                                error!("return with unknown file type {}", stat.st_mode & libc::S_IFMT);
+                                reply.error(libc::EINVAL)
                             }
                         }
                     }

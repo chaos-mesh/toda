@@ -22,7 +22,8 @@ pub fn with_mnt_namespace<F: Fn() -> Result<R>, R>(f: Box<F>, pid: i32) -> Resul
     let args = Box::new((f, Box::new(sender), Box::new(pid)));
 
     extern "C" fn callback<F: Fn() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
-        let args= unsafe {Box::from_raw(args as *mut (Box<F>, Box<Sender<Result<R>>>, Box<i32>))};
+        let args =
+            unsafe { Box::from_raw(args as *mut (Box<F>, Box<Sender<Result<R>>>, Box<i32>)) };
         let (f, sender, pid) = *args;
 
         if let Err(err) = enter_mnt_namespace(*pid) {
@@ -37,13 +38,13 @@ pub fn with_mnt_namespace<F: Fn() -> Result<R>, R>(f: Box<F>, pid: i32) -> Resul
 
     let pid = unsafe {
         libc::clone(
-            callback::<F, R>, 
-            (stack.as_mut_ptr() as *mut libc::c_void).add(1024 * 1024), 
-            libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SIGHAND | libc::SIGCHLD, 
+            callback::<F, R>,
+            (stack.as_mut_ptr() as *mut libc::c_void).add(1024 * 1024),
+            libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SIGHAND | libc::SIGCHLD,
             Box::into_raw(args) as *mut libc::c_void,
         )
     };
     println!("clone returned {}", pid);
 
-    return receiver.recv()?
+    return receiver.recv()?;
 }

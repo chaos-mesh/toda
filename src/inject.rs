@@ -63,7 +63,8 @@ impl Injection {
     pub fn mount(&mut self) -> Result<()> {
         if self.mounts.is_root(&self.original_path)? {
             // TODO: make the parent mount points private before move mount points
-            self.mounts.move_mount(&self.original_path, &self.new_path)?;
+            self.mounts
+                .move_mount(&self.original_path, &self.new_path)?;
         } else {
             rename(&self.original_path, &self.new_path)?;
         }
@@ -80,7 +81,7 @@ impl Injection {
 
         self.fuse_session = Some(session);
 
-        return Ok(())
+        return Ok(());
     }
 
     #[tracing::instrument(skip(self))]
@@ -161,7 +162,8 @@ impl Injection {
         // TODO: replace the fd back and force remove the mount
         if self.mounts.is_root(&self.original_path)? {
             // TODO: make the parent mount points private before move mount points
-            self.mounts.move_mount(&self.new_path, &self.original_path)?;
+            self.mounts
+                .move_mount(&self.new_path, &self.original_path)?;
         } else {
             rename(&self.new_path, &self.original_path)?;
         }
