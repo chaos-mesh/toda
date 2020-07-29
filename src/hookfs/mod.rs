@@ -606,20 +606,12 @@ impl AsyncFileSystemImpl for HookFs {
         Err(Error::Sys(Errno::ENOSYS))
     }
     #[tracing::instrument]
-    async fn statfs(&self, ino: u64, reply: ReplyStatfs) {
+    async fn statfs(&self, ino: u64) -> Result<StatFs> {
         trace!("statfs");
 
-        let stat = match statfs::statfs(self.original_path.as_path()) {
-            Ok(stat) => stat,
-            Err(err) => {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
-        };
+        let stat = statfs::statfs(self.original_path.as_path())?;
 
-        reply.statfs(
+        Ok(StatFs::new(
             stat.blocks(),
             stat.blocks_free(),
             stat.blocks_available(),
@@ -628,7 +620,7 @@ impl AsyncFileSystemImpl for HookFs {
             stat.block_size() as u32,
             stat.maximum_name_length() as u32,
             stat.block_size() as u32,
-        );
+        ))
     }
     #[tracing::instrument]
     async fn setxattr(

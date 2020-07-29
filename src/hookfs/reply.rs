@@ -57,6 +57,25 @@ impl Data {
     }
 }
 
+#[derive(Debug)]
+pub struct StatFs {
+    pub blocks: u64, 
+    pub bfree: u64, 
+    pub bavail: u64, 
+    pub files: u64, 
+    pub ffree: u64, 
+    pub bsize: u32, 
+    pub namelen: u32, 
+    pub frsize: u32
+}
+impl StatFs {
+    pub fn new(blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) -> Self {
+        Self {
+            blocks, bfree, bavail, files, ffree, bsize, namelen, frsize
+        }
+    }
+}
+
 pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
     fn reply_err(self, err: libc::c_int);
@@ -106,6 +125,15 @@ impl FsReply<Attr> for ReplyAttr {
 impl FsReply<Data> for ReplyData {
     fn reply_ok(self, item: Data) {
         self.data(item.data.as_slice());
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<StatFs> for ReplyStatfs {
+    fn reply_ok(self, item: StatFs) {
+        self.statfs(item.blocks, item.bfree, item.bavail, item.files, item.ffree, item.bsize, item.namelen, item.frsize)
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);

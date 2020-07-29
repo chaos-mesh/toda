@@ -94,7 +94,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn fsyncdir(&self, ino: u64, fh: u64, datasync: bool) -> Result<()>;
 
-    async fn statfs(&self, ino: u64, reply: ReplyStatfs);
+    async fn statfs(&self, ino: u64) -> Result<StatFs>;
 
     async fn setxattr(
         &self,
@@ -414,8 +414,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn statfs(&mut self, _req: &Request, ino: u64, reply: ReplyStatfs) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl.statfs(ino, reply).await;
+        self.spawn(reply, async move {
+            async_impl.statfs(ino).await
         });
     }
     fn setxattr(
