@@ -69,12 +69,14 @@ impl Injection {
             rename(&self.original_path, &self.new_path)?;
         }
 
-        let fs = hookfs::HookFs::new(&self.original_path, &self.new_path);
+        let fs =
+            hookfs::AsyncFileSystem::from(hookfs::HookFs::new(&self.original_path, &self.new_path));
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 
             fuse::spawn_mount(fs, &self.original_path, &[])?
         };
+        trace!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         std::thread::sleep(std::time::Duration::from_secs(1));

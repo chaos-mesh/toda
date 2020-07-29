@@ -1,4 +1,5 @@
 #![feature(box_syntax)]
+#![feature(async_closure)]
 
 mod hookfs;
 mod inject;
