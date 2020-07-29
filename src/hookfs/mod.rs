@@ -115,6 +115,7 @@ impl Filesystem for HookFs {
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
+        trace!("lookup");
         let time = get_time();
 
         let parent_path = match self.inode_map.get(&parent) {
@@ -248,6 +249,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn readlink(&mut self, _req: &fuse::Request, ino: u64, reply: fuse::ReplyData) {
+        trace!("readlink");
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -290,6 +292,7 @@ impl Filesystem for HookFs {
         rdev: u32,
         reply: fuse::ReplyEntry,
     ) {
+        trace!("mknod");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -332,6 +335,7 @@ impl Filesystem for HookFs {
         mode: u32,
         reply: fuse::ReplyEntry,
     ) {
+        trace!("mkdir");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -370,6 +374,7 @@ impl Filesystem for HookFs {
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("unlink");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -399,6 +404,7 @@ impl Filesystem for HookFs {
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("rmdir");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -440,6 +446,7 @@ impl Filesystem for HookFs {
         link: &std::path::Path,
         reply: fuse::ReplyEntry,
     ) {
+        trace!("symlink");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -469,6 +476,7 @@ impl Filesystem for HookFs {
         _newname: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("rename");
         debug!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
@@ -481,6 +489,7 @@ impl Filesystem for HookFs {
         newname: &std::ffi::OsStr,
         reply: fuse::ReplyEntry,
     ) {
+        trace!("link");
         let original_path =  match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -508,6 +517,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn open(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+        trace!("open");
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
@@ -547,6 +557,7 @@ impl Filesystem for HookFs {
         size: u32,
         reply: fuse::ReplyData,
     ) {
+        trace!("read");
         let fd: RawFd = self.opened_files[&(fh as usize)];
         if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
             let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
@@ -577,6 +588,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyWrite,
     ) {
+        trace!("write");
         let fd = match self.opened_files.get(&(fh as usize)) {
             Some(fd) => *fd,
             None => {
@@ -613,6 +625,7 @@ impl Filesystem for HookFs {
         _lock_owner: u64,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("flush");
         // flush is implemented with fsync. Is it the correct way?
         if let Some(fd) = self.opened_files.get(&(fh as usize)) {
             if let Err(err) = fsync(*fd) {
@@ -622,6 +635,8 @@ impl Filesystem for HookFs {
             } else {
                 reply.ok()
             }
+        } else {
+            reply.error(-1)
         }
     }
     #[tracing::instrument(skip(_req))]
@@ -635,6 +650,7 @@ impl Filesystem for HookFs {
         _flush: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("release");
         self.opened_files.remove(&(fh as usize));
         reply.ok();
     }
@@ -647,6 +663,7 @@ impl Filesystem for HookFs {
         _datasync: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("fsync");
         if let Some(fd) = self.opened_files.get(&(fh as usize)) {
             if let Err(err) = fsync(*fd) {
                 trace!("return with err: {}", err);
@@ -655,10 +672,13 @@ impl Filesystem for HookFs {
             } else {
                 reply.ok()
             }
+        } else {
+            reply.error(-1)
         }
     }
     #[tracing::instrument(skip(_req))]
     fn opendir(&mut self, _req: &fuse::Request, ino: u64, flags: u32, reply: fuse::ReplyOpen) {
+        trace!("opendir");
         let path = self.inode_map[&ino].as_path();
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
@@ -689,6 +709,7 @@ impl Filesystem for HookFs {
         offset: i64,
         mut reply: fuse::ReplyDirectory,
     ) {
+        trace!("readdir");
         let offset = offset as usize;
         let dir = &self.opened_dirs[&(fh as usize)];
 
@@ -742,6 +763,7 @@ impl Filesystem for HookFs {
         _flags: u32,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("releasedir");
         self.opened_dirs.remove(&(fh as usize));
         reply.ok();
     }
@@ -759,6 +781,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn statfs(&mut self, _req: &fuse::Request, _ino: u64, reply: fuse::ReplyStatfs) {
+        trace!("statfs");
         match statfs::statfs(&self.original_path) {
             Ok(stat) => {
                 // return f_bsize as f_frsize
@@ -784,6 +807,7 @@ impl Filesystem for HookFs {
         _position: u32,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("setxattr");
 
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
@@ -903,6 +927,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn listxattr(&mut self, _req: &fuse::Request, ino: u64, size: u32, reply: fuse::ReplyXattr) {
+        trace!("listxattr");
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -957,6 +982,7 @@ impl Filesystem for HookFs {
         name: &std::ffi::OsStr,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("removexattr");
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
@@ -1004,6 +1030,7 @@ impl Filesystem for HookFs {
     }
     #[tracing::instrument(skip(_req))]
     fn access(&mut self, _req: &fuse::Request, ino: u64, mask: u32, reply: fuse::ReplyEmpty) {
+        trace!("access");
         let path = self.inode_map[&ino].as_path();
         
         let mask = match AccessFlags::from_bits(mask as i32) {
@@ -1032,6 +1059,7 @@ impl Filesystem for HookFs {
         flags: u32,
         reply: fuse::ReplyCreate,
     ) {
+        trace!("create");
         let parent_path = match self.inode_map.get(&parent) {
             Some(path) => path.as_path(),
             None => {
@@ -1100,6 +1128,7 @@ impl Filesystem for HookFs {
         pid: u32,
         reply: fuse::ReplyLock,
     ) {
+        trace!("getlk");
         // kernel will implement for hookfs
         reply.error(nix::libc::ENOSYS);
     }
@@ -1117,6 +1146,7 @@ impl Filesystem for HookFs {
         _sleep: bool,
         reply: fuse::ReplyEmpty,
     ) {
+        trace!("setlk");
         // kernel will implement for hookfs
         reply.error(nix::libc::ENOSYS);
     }

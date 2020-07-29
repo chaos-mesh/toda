@@ -14,19 +14,26 @@ use nix::fcntl::FcntlArg;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 
-#[derive(Default)]
-pub struct InjectionBuilder {
-    pid: Option<i32>,
-    original_path: Option<PathBuf>,
-    new_path: Option<PathBuf>,
+use tracing::trace;
+
+#[derive(PartialEq, Debug)]
+enum MountDirection {
+    EnableChaos,
+    DisableChaos,
 }
 
-impl InjectionBuilder {
-    pub fn new() -> InjectionBuilder {
-        return InjectionBuilder::default();
-    }
+#[derive(Debug)]
+pub struct Injection {
+    pid: i32,
+    original_path: PathBuf,
+    new_path: PathBuf,
+    fuse_session: Option<BackgroundSession<'static>>,
+    direction: MountDirection,
+    mounts: mount::MountsInfo,
+}
 
-    pub fn path<P: AsRef<Path>>(self, path: P) -> Result<InjectionBuilder> {
+impl Injection {
+    pub fn create_injection<P: AsRef<Path>>(path: P, pid: i32) -> Result<Injection> {
         let original_path: PathBuf = path.as_ref().to_owned();
 
         let mut base_path: PathBuf = path.as_ref().to_owned();
@@ -43,74 +50,43 @@ impl InjectionBuilder {
         let new_filename = format!("__chaosfs__{}__", original_filename);
         new_path.push(new_filename.as_str());
 
-        return Ok(InjectionBuilder {
-            pid: self.pid,
-            original_path: Some(original_path),
-            new_path: Some(new_path),
+        return Ok(Injection {
+            pid,
+            original_path,
+            new_path,
+            fuse_session: None,
+            direction: MountDirection::EnableChaos,
+            mounts: mount::MountsInfo::parse_mounts()?,
         });
     }
 
-    pub fn pid(self, pid: i32) -> Result<InjectionBuilder> {
-        return Ok(InjectionBuilder {
-            pid: Some(pid),
-            original_path: self.original_path,
-            new_path: self.new_path,
-        });
-    }
-
-    pub fn mount(self) -> Result<Injection> {
-        if let InjectionBuilder {
-            pid: Some(pid),
-            original_path: Some(original_path),
-            new_path: Some(new_path),
-        } = self
-        {
-            if mount::is_root(&original_path)? {
-                // TODO: make the parent mount points private before move mount points
-                mount::move_mount(&original_path, &new_path)?;
-            } else {
-                rename(&original_path, &new_path)?;
-            }
-
-            let fs = hookfs::HookFs::new(&original_path, &new_path);
-            let session = unsafe {
-                std::fs::create_dir_all(new_path.as_path())?;
-
-                fuse::spawn_mount(fs, &original_path, &[])?
-            };
-            // TODO: remove this. But wait for FUSE gets up
-            // Related Issue: https://github.com/zargony/fuse-rs/issues/9
-            std::thread::sleep(std::time::Duration::from_secs(1));
-
-            return Ok(Injection {
-                pid,
-                original_path,
-                new_path,
-                fuse_session: Some(session),
-                direction: MountDirection::EnableChaos,
-            });
+    pub fn mount(&mut self) -> Result<()> {
+        if self.mounts.is_root(&self.original_path)? {
+            // TODO: make the parent mount points private before move mount points
+            self.mounts.move_mount(&self.original_path, &self.new_path)?;
         } else {
-            return Err(anyhow!("run without setting path or pid"));
+            rename(&self.original_path, &self.new_path)?;
         }
+
+        let fs = hookfs::HookFs::new(&self.original_path, &self.new_path);
+        let session = unsafe {
+            std::fs::create_dir_all(self.new_path.as_path())?;
+
+            fuse::spawn_mount(fs, &self.original_path, &[])?
+        };
+        // TODO: remove this. But wait for FUSE gets up
+        // Related Issue: https://github.com/zargony/fuse-rs/issues/9
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        self.fuse_session = Some(session);
+
+        return Ok(())
     }
-}
 
-#[derive(PartialEq)]
-enum MountDirection {
-    EnableChaos,
-    DisableChaos,
-}
-
-pub struct Injection {
-    pid: i32,
-    original_path: PathBuf,
-    new_path: PathBuf,
-    fuse_session: Option<BackgroundSession<'static>>,
-    direction: MountDirection,
-}
-
-impl Injection {
+    #[tracing::instrument(skip(self))]
     pub fn reopen(&mut self) -> Result<()> {
+        trace!("reopen fd for pid");
+
         let process = ptrace::TracedProcess::trace(self.pid)?;
 
         let base_path = if self.direction == MountDirection::EnableChaos {
@@ -148,7 +124,10 @@ impl Injection {
         return Ok(());
     }
 
+    #[tracing::instrument(skip(self, thread, path))]
     fn reopen_file<P: AsRef<Path>>(&self, thread: &TracedThread, fd: u64, path: P) -> Result<()> {
+        trace!("reopen fd: {} for pid", fd);
+
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
         } else {
@@ -163,31 +142,28 @@ impl Injection {
             self.new_path.join(striped_path)
         };
 
-        let flags = thread.fcntl(fd, FcntlArg::F_GETFD)?;
-        let mode = thread.fcntl(fd, FcntlArg::F_GETFL)? & 0003; // Only get Access Mode
+        let flags = thread.fcntl(fd, FcntlArg::F_GETFL)?;
 
-        let flags = OFlag::from_bits(flags as i32).ok_or(anyhow!("flags is not available"))?;
-        let mode = Mode::from_bits(mode as u32).ok_or(anyhow!("mode is not available"))?;
+        let flags = unsafe {OFlag::from_bits_unchecked(flags as i32)};
 
-        let new_open_fd = thread.open(original_path, flags, mode)?;
+        let new_open_fd = thread.open(original_path, flags, Mode::empty())?;
         thread.dup2(new_open_fd, fd)?;
         thread.close(new_open_fd)?;
 
         return Ok(());
     }
 
-    pub fn recover(&mut self) -> Result<()> {
-        self.reopen()?;
-
+    #[tracing::instrument(skip(self))]
+    pub fn recover_mount(&mut self) -> Result<()> {
         let injection = self.fuse_session.take().unwrap();
         drop(injection);
 
         // TODO: replace the fd back and force remove the mount
-        if mount::is_root(&self.new_path).unwrap() {
+        if self.mounts.is_root(&self.original_path)? {
             // TODO: make the parent mount points private before move mount points
-            mount::move_mount(&self.new_path, &self.original_path).unwrap();
+            self.mounts.move_mount(&self.new_path, &self.original_path)?;
         } else {
-            rename(&self.new_path, &self.original_path).unwrap();
+            rename(&self.new_path, &self.original_path)?;
         }
 
         return Ok(());
