@@ -2,7 +2,7 @@ use fuse::*;
 use time::{get_time, Timespec};
 use tracing::{debug, trace};
 
-use super::errors::{HookFsError, Result};
+use super::errors::Result;
 
 use std::fmt::Debug;
 
@@ -30,6 +30,30 @@ pub struct Open {
 impl Open {
     pub fn new(fh: u64, flags: u32) -> Self {
         Self { fh, flags }
+    }
+}
+
+#[derive(Debug)]
+pub struct Attr {
+    pub time: Timespec,
+    pub attr: FileAttr,
+}
+impl Attr {
+    pub fn new(attr: FileAttr) -> Self {
+        Self {
+            time: get_time(),
+            attr,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Data {
+    pub data: Vec<u8>,
+}
+impl Data {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data }
     }
 }
 
@@ -70,8 +94,26 @@ impl FsReply<Open> for ReplyOpen {
     }
 }
 
+impl FsReply<Attr> for ReplyAttr {
+    fn reply_ok(self, item: Attr) {
+        self.attr(&item.time, &item.attr);
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<Data> for ReplyData {
+    fn reply_ok(self, item: Data) {
+        self.data(item.data.as_slice());
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
 impl FsReply<()> for ReplyEmpty {
-    fn reply_ok(self, item: ()) {
+    fn reply_ok(self, _: ()) {
         self.ok();
     }
     fn reply_err(self, err: libc::c_int) {

@@ -140,7 +140,7 @@ fn convert_filetype(file_type: dir::Type) -> FileType {
 
 // convert_libc_stat_to_fuse_stat converts file stat from libc form into fuse form.
 // returns None if the file type is unknown.
-fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Option<FileAttr> {
+fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
     let kind = match stat.st_mode & libc::S_IFMT {
         libc::S_IFBLK => FileType::BlockDevice,
         libc::S_IFCHR => FileType::CharDevice,
@@ -149,9 +149,9 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Option<FileAttr> {
         libc::S_IFLNK => FileType::Symlink,
         libc::S_IFREG => FileType::RegularFile,
         libc::S_IFSOCK => FileType::Socket,
-        _ => return None,
+        _ => return Err(Error::UnknownFileType),
     };
-    return Some(FileAttr {
+    return Ok(FileAttr {
         ino: stat.st_ino,
         size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
@@ -185,7 +185,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = stat::lstat(&path)?;
 
-        let stat = convert_libc_stat_to_fuse_stat(stat).ok_or(Error::UnknownFileType)?;
+        let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
         self.inode_map.write().await.insert(stat.ino, path);
         // TODO: support generation number
@@ -202,46 +202,21 @@ impl AsyncFileSystemImpl for HookFs {
     }
 
     #[tracing::instrument]
-    async fn getattr(&self, ino: u64, reply: ReplyAttr) {
+    async fn getattr(&self, ino: u64) -> Result<Attr> {
         trace!("getattr");
 
-        let time = get_time();
-
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path.as_path(),
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map
+            .get(&ino)
+            .ok_or(Error::InodeNotFound { inode: ino })?;
 
-        let stat = match stat::lstat(path) {
-            Ok(stat) => stat,
-            Err(err) => {
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                trace!("return with errno: {}", errno);
-                reply.error(errno);
-                return;
-            }
-        };
+        let stat = stat::lstat(path)?;
 
-        let stat = match convert_libc_stat_to_fuse_stat(stat) {
-            Some(stat) => stat,
-            None => {
-                error!(
-                    "return with unknown file type {}",
-                    stat.st_mode & libc::S_IFMT
-                );
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
         trace!("return with {:?}", stat);
 
-        reply.attr(&time, &stat);
+        Ok(Attr::new(stat))
     }
 
     #[tracing::instrument]
@@ -259,101 +234,58 @@ impl AsyncFileSystemImpl for HookFs {
         chgtime: Option<Timespec>,
         bkuptime: Option<Timespec>,
         flags: Option<u32>,
-        reply: ReplyAttr,
-    ) {
+    ) -> Result<Attr> {
         trace!("setattr");
 
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path.as_path(),
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map
+            .get(&ino)
+            .ok_or(Error::InodeNotFound { inode: ino })?;
 
-        if let Err(err) = chown(
+        chown(
             path,
             uid.map(|uid| Uid::from_raw(uid)),
             gid.map(|gid| Gid::from_raw(gid)),
-        ) {
-            trace!("return with error: {}", err);
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-            return;
-        }
+        )?;
         if let Some(mode) = mode {
-            if let Err(err) = stat::fchmodat(
+            stat::fchmodat(
                 None,
                 path,
                 stat::Mode::from_bits_truncate(mode),
                 stat::FchmodatFlags::FollowSymlink,
-            ) {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
+            )?;
         }
+
         if let Some(size) = size {
-            if let Err(err) = truncate(path, size as i64) {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
+            truncate(path, size as i64)?;
         }
 
         if let (Some(atime), Some(mtime)) = (atime, mtime) {
             let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
             let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
             // TODO: check whether one of them is Some
-            if let Err(err) = stat::utimes(path, &atime, &mtime) {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
+            stat::utimes(path, &atime, &mtime)?;
         }
 
-        self.getattr(ino, reply).await
+        self.getattr(ino).await
     }
 
     #[tracing::instrument]
-    async fn readlink(&self, ino: u64, reply: ReplyData) {
+    async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path.as_path(),
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map
+            .get(&ino)
+            .ok_or(Error::InodeNotFound { inode: ino })?;
 
-        let path = match readlink(path) {
-            Ok(path) => path,
-            Err(err) => {
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
-        };
+        let path = readlink(path)?;
 
-        let path = match CString::new(path.as_os_str().as_bytes()) {
-            Ok(path) => path,
-            Err(_) => {
-                debug!("converting path to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let path = CString::new(path.as_os_str().as_bytes())?;
 
         let data = path.as_bytes_with_nul();
         trace!("reply with data: {:?}", data);
-        reply.data(data);
+
+        Ok(Data::new(path.into_bytes()))
     }
 
     #[tracing::instrument]
@@ -494,37 +426,24 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with fh: {}, flags: {}", fh, 0);
 
         // TODO: force DIRECT_IO is not a great option
-        Ok(Open::new( fh, 0 ))
+        Ok(Open::new(fh, 0))
     }
     #[tracing::instrument]
-    async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+    async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
         trace!("read");
         let opened_files = self.opened_files.read().await;
-        let fd: RawFd = match opened_files.get(fh as usize) {
-            Some(fd) => *fd,
-            None => {
-                trace!("cannot find fh {} in opened_files", fh);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
-        if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-            return;
-        }
+        let fd: RawFd = *opened_files
+            .get(fh as usize)
+            .ok_or(Error::FhNotFound { fh })?;
+        lseek(fd, offset, Whence::SeekSet)?;
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0);
 
-        if let Err(err) = read(fd, &mut buf) {
-            trace!("return with err: {}", err);
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-            return;
-        };
+        read(fd, &mut buf)?;
         trace!("return with data: {:?}", buf);
-        reply.data(&buf)
+
+        Ok(Data::new(buf))
     }
     #[tracing::instrument]
     async fn write(
@@ -582,12 +501,11 @@ impl AsyncFileSystemImpl for HookFs {
         flags: u32,
         lock_owner: u64,
         flush: bool,
-        reply: ReplyEmpty,
-    ) {
+    ) -> Result<()> {
         trace!("release");
         let mut opened_files = self.opened_files.write().await;
         opened_files.delete(fh as usize);
-        reply.ok();
+        Ok(())
     }
     #[tracing::instrument]
     async fn fsync(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
@@ -617,7 +535,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("return with fh: {}, flags: {}", fh, flags);
 
-        Ok(Open::new( fh, flags ))
+        Ok(Open::new(fh, flags))
     }
 
     #[tracing::instrument]
@@ -720,38 +638,18 @@ impl AsyncFileSystemImpl for HookFs {
         value: Vec<u8>,
         flags: u32,
         position: u32,
-        reply: ReplyEmpty,
-    ) {
+    ) -> Result<()> {
         trace!("setxattr");
 
         let inode_map = self.inode_map.read().await;
-        let path = match inode_map.get(&ino) {
-            Some(path) => path,
-            None => {
-                error!("cannot find inode({}) in inode_map", ino);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let path = inode_map
+            .get(&ino)
+            .ok_or(Error::InodeNotFound { inode: ino })?;
 
-        let path = match CString::new(path.as_os_str().as_bytes()) {
-            Ok(path) => path,
-            Err(_) => {
-                debug!("converting path to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
-        let name = match CString::new(name.as_bytes()) {
-            Ok(name) => name,
-            Err(_) => {
-                debug!("converting name to CString failed");
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let name = CString::new(name.as_bytes())?;
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let value_ptr = &value[0] as *const u8 as *const libc::c_void;
@@ -759,14 +657,9 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
 
         if ret == -1 {
-            let err = nix::Error::last();
-            trace!("return with err: {}", err);
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-
-            return;
+            return Err(Error::from(nix::Error::last()));
         }
-        reply.ok()
+        Ok(())
     }
     #[tracing::instrument]
     async fn getxattr(&self, ino: u64, name: OsString, size: u32, reply: ReplyXattr) {
@@ -948,8 +841,8 @@ impl AsyncFileSystemImpl for HookFs {
         };
 
         let stat = match convert_libc_stat_to_fuse_stat(stat) {
-            Some(stat) => stat,
-            None => {
+            Ok(stat) => stat,
+            Err(_) => {
                 error!(
                     "return with unknown file type {}",
                     stat.st_mode & libc::S_IFMT

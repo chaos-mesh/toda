@@ -18,7 +18,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn forget(&self, ino: u64, nlookup: u64);
 
-    async fn getattr(&self, ino: u64, reply: ReplyAttr);
+    async fn getattr(&self, ino: u64) -> Result<Attr>;
 
     async fn setattr(
         &self,
@@ -34,10 +34,9 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         chgtime: Option<Timespec>,
         bkuptime: Option<Timespec>,
         flags: Option<u32>,
-        reply: ReplyAttr,
-    );
+    ) -> Result<Attr>;
 
-    async fn readlink(&self, ino: u64, reply: ReplyData);
+    async fn readlink(&self, ino: u64) -> Result<Data>;
 
     async fn mknod(&self, parent: u64, name: OsString, mode: u32, rdev: u32) -> Result<Entry>;
 
@@ -62,7 +61,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn open(&self, ino: u64, flags: u32) -> Result<Open>;
 
-    async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData);
+    async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data>;
 
     async fn write(
         &self,
@@ -83,8 +82,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         flags: u32,
         lock_owner: u64,
         flush: bool,
-        reply: ReplyEmpty,
-    );
+    ) -> Result<()>;
 
     async fn fsync(&self, ino: u64, fh: u64, datasync: bool) -> Result<()>;
 
@@ -105,8 +103,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         value: Vec<u8>,
         flags: u32,
         position: u32,
-        reply: ReplyEmpty,
-    );
+    ) -> Result<()>;
 
     async fn getxattr(&self, ino: u64, name: OsString, size: u32, reply: ReplyXattr);
 
@@ -208,9 +205,7 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl.getattr(ino, reply).await;
-        });
+        self.spawn(reply, async move { async_impl.getattr(ino).await });
     }
 
     fn setattr(
@@ -231,21 +226,18 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         reply: ReplyAttr,
     ) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
+        self.spawn(reply, async move {
             async_impl
                 .setattr(
                     ino, mode, uid, gid, size, atime, mtime, fh, crtime, chgtime, bkuptime, flags,
-                    reply,
                 )
-                .await;
+                .await
         });
     }
 
     fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl.readlink(ino, reply).await;
-        });
+        self.spawn(reply, async move { async_impl.readlink(ino).await });
     }
     fn mknod(
         &mut self,
@@ -348,8 +340,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         reply: ReplyData,
     ) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl.read(ino, fh, offset, size, reply).await;
+        self.spawn(reply, async move {
+            async_impl.read(ino, fh, offset, size).await
         });
     }
     fn write(
@@ -386,10 +378,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         reply: ReplyEmpty,
     ) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
-            async_impl
-                .release(ino, fh, flags, lock_owner, flush, reply)
-                .await;
+        self.spawn(reply, async move {
+            async_impl.release(ino, fh, flags, lock_owner, flush).await
         });
     }
     fn fsync(&mut self, _req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
@@ -441,10 +431,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let async_impl = self.inner.clone();
         let name = name.to_owned();
         let value = value.to_owned();
-        self.thread_pool.spawn(async move {
-            async_impl
-                .setxattr(ino, name, value, flags, position, reply)
-                .await;
+        self.spawn(reply, async move {
+            async_impl.setxattr(ino, name, value, flags, position).await
         });
     }
     fn getxattr(
