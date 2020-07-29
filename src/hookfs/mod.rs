@@ -4,7 +4,7 @@ mod reply;
 
 use async_trait::async_trait;
 use fuse::*;
-use time::{get_time, Timespec};
+use time::Timespec;
 
 use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
 
@@ -377,11 +377,10 @@ impl AsyncFileSystemImpl for HookFs {
         name: OsString,
         newparent: u64,
         newname: OsString,
-        reply: ReplyEmpty,
-    ) {
+    ) -> Result<()> {
         trace!("rename");
         error!("unimplimented");
-        reply.error(nix::libc::ENOSYS);
+        Err(Error::Sys(Errno::ENOSYS))
     }
     #[tracing::instrument]
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
@@ -453,34 +452,16 @@ impl AsyncFileSystemImpl for HookFs {
         offset: i64,
         data: Vec<u8>,
         flags: u32,
-        reply: ReplyWrite,
-    ) {
+    ) -> Result<Write> {
         trace!("write");
         let opened_files = self.opened_files.read().await;
-        let fd: RawFd = match opened_files.get(fh as usize) {
-            Some(fd) => *fd,
-            None => {
-                trace!("cannot find fh {} in opened_files", fh);
-                reply.error(libc::EFAULT);
-                return;
-            }
-        };
+        let fd: RawFd = *opened_files.get(fh as usize).ok_or(Error::FhNotFound{fh})?;
 
-        if let Err(err) = lseek(fd, offset, Whence::SeekSet) {
-            let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-            reply.error(errno);
-            return;
-        }
+        lseek(fd, offset, Whence::SeekSet)?;
 
-        match write(fd, &data) {
-            Ok(size) => reply.written(size as u32),
-            Err(err) => {
-                trace!("return with err: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
-        }
+        let size = write(fd, &data)?;
+
+        Ok(Write::new(size as u32))
     }
     #[tracing::instrument]
     async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()> {
@@ -790,18 +771,11 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
     #[tracing::instrument]
-    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32, reply: ReplyCreate) {
+    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32) -> Result<Create> {
         trace!("create");
         let path = {
             let inode_map = self.inode_map.read().await;
-            let parent_path = match inode_map.get(&parent) {
-                Some(path) => path,
-                None => {
-                    error!("cannot find inode({}) in inode_map", parent);
-                    reply.error(libc::EFAULT);
-                    return;
-                }
-            };
+            let parent_path = inode_map.get(&parent).ok_or(Error::InodeNotFound{inode: parent})?;
             parent_path.join(name)
         };
 
@@ -812,41 +786,13 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
 
-        let fd = match open(&path, filtered_flags, mode) {
-            Ok(fd) => fd,
-            Err(err) => {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
-        };
+        let fd = open(&path, filtered_flags, mode)?;
 
-        let stat = match stat::lstat(&path) {
-            Ok(stat) => stat,
-            Err(err) => {
-                trace!("return with error: {}", err);
-                let errno = err.as_errno().map(|errno| errno as i32).unwrap_or(-1);
-                reply.error(errno);
-                return;
-            }
-        };
+        let stat = stat::lstat(&path)?;
 
-        let stat = match convert_libc_stat_to_fuse_stat(stat) {
-            Ok(stat) => stat,
-            Err(_) => {
-                error!(
-                    "return with unknown file type {}",
-                    stat.st_mode & libc::S_IFMT
-                );
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
+        let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
         self.inode_map.write().await.insert(stat.ino, path);
-
-        let time = get_time();
 
         let fh = self.opened_files.write().await.insert(fd);
 
@@ -854,7 +800,7 @@ impl AsyncFileSystemImpl for HookFs {
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
 
-        reply.created(&time, &stat, 0, fh as u64, flags);
+        Ok(Create::new(stat, 0, fh as u64, flags))
     }
     #[tracing::instrument]
     async fn getlk(
@@ -866,11 +812,10 @@ impl AsyncFileSystemImpl for HookFs {
         _end: u64,
         _typ: u32,
         _pid: u32,
-        reply: ReplyLock,
-    ) {
+    ) -> Result<Lock> {
         trace!("getlk");
         // kernel will implement for hookfs
-        reply.error(nix::libc::ENOSYS);
+        Err(Error::Sys(Errno::ENOSYS))
     }
     #[tracing::instrument]
     async fn setlk(

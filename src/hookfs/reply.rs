@@ -76,6 +76,44 @@ impl StatFs {
     }
 }
 
+#[derive(Debug)]
+pub struct Write {
+    pub size: u32,
+}
+impl Write {
+    pub fn new(size: u32) -> Self {
+        Self {
+            size,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Create {
+    pub ttl: Timespec, 
+    pub attr: FileAttr, 
+    pub generation: u64, 
+    pub fh: u64, 
+    pub flags: u32
+}
+impl Create {
+    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: u32) -> Self { Self { ttl: get_time(), attr, generation, fh, flags } }
+
+}
+
+#[derive(Debug)]
+pub struct Lock {
+    pub start: u64, 
+    pub end: u64, 
+    pub typ: u32, 
+    pub pid: u32
+}
+
+impl Lock {
+    pub fn _new(start: u64, end: u64, typ: u32, pid: u32) -> Self { Self { start, end, typ, pid } }
+}
+
+
 pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
     fn reply_err(self, err: libc::c_int);
@@ -134,6 +172,33 @@ impl FsReply<Data> for ReplyData {
 impl FsReply<StatFs> for ReplyStatfs {
     fn reply_ok(self, item: StatFs) {
         self.statfs(item.blocks, item.bfree, item.bavail, item.files, item.ffree, item.bsize, item.namelen, item.frsize)
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<Write> for ReplyWrite {
+    fn reply_ok(self, item: Write) {
+        self.written(item.size);
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<Create> for ReplyCreate {
+    fn reply_ok(self, item: Create) {
+        self.created(&item.ttl, &item.attr, item.generation, item.fh, item.flags);
+    }
+    fn reply_err(self, err: libc::c_int) {
+        self.error(err);
+    }
+}
+
+impl FsReply<Lock> for ReplyLock {
+    fn reply_ok(self, item: Lock) {
+        self.locked(item.start, item.end, item.typ, item.pid);
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);

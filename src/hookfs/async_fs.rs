@@ -54,8 +54,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         name: OsString,
         newparent: u64,
         newname: OsString,
-        reply: ReplyEmpty,
-    );
+    ) -> Result<()>;
 
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry>;
 
@@ -70,8 +69,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         offset: i64,
         data: Vec<u8>,
         flags: u32,
-        reply: ReplyWrite,
-    );
+    ) -> Result<Write>;
 
     async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()>;
 
@@ -113,7 +111,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn access(&self, ino: u64, mask: u32) -> Result<()>;
 
-    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32, reply: ReplyCreate);
+    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32) -> Result<Create>;
 
     async fn getlk(
         &self,
@@ -124,8 +122,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
         end: u64,
         typ: u32,
         pid: u32,
-        reply: ReplyLock,
-    );
+    ) -> Result<Lock>;
 
     async fn setlk(
         &self,
@@ -306,10 +303,10 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let async_impl = self.inner.clone();
         let name = name.to_owned();
         let newname = newname.to_owned();
-        self.thread_pool.spawn(async move {
+        self.spawn(reply, async move {
             async_impl
-                .rename(parent, name, newparent, newname, reply)
-                .await;
+                .rename(parent, name, newparent, newname)
+                .await
         });
     }
     fn link(
@@ -356,8 +353,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.inner.clone();
         let data = data.to_owned();
-        self.thread_pool.spawn(async move {
-            async_impl.write(ino, fh, offset, data, flags, reply).await;
+        self.spawn(reply, async move {
+            async_impl.write(ino, fh, offset, data, flags).await
         });
     }
     fn flush(&mut self, _req: &Request, ino: u64, fh: u64, lock_owner: u64, reply: ReplyEmpty) {
@@ -478,8 +475,8 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.inner.clone();
         let name = name.to_owned();
-        self.thread_pool.spawn(async move {
-            async_impl.create(parent, name, mode, flags, reply).await;
+        self.spawn(reply, async move {
+            async_impl.create(parent, name, mode, flags).await
         });
     }
     fn getlk(
@@ -495,10 +492,10 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         reply: ReplyLock,
     ) {
         let async_impl = self.inner.clone();
-        self.thread_pool.spawn(async move {
+        self.spawn(reply, async move {
             async_impl
-                .getlk(ino, fh, lock_owner, start, end, typ, pid, reply)
-                .await;
+                .getlk(ino, fh, lock_owner, start, end, typ, pid)
+                .await
         });
     }
     fn setlk(
