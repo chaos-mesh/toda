@@ -1,10 +1,12 @@
+#![feature(box_syntax)]
+
 mod hookfs;
 mod inject;
 mod mount;
 mod namespace;
 mod ptrace;
 
-use inject::InjectionBuilder;
+use inject::Injection;
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
@@ -13,6 +15,7 @@ use tracing::{info, Level};
 use tracing_subscriber;
 
 use std::path::PathBuf;
+use std::sync::{Mutex, Arc};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -32,15 +35,15 @@ fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
-    // TODO: enter namespace in another thread
-    namespace::enter_mnt_namespace(option.pid)?;
+    let injection = Arc::new(Mutex::new(Injection::create_injection(option.path, option.pid)?));
+    let mount_injection = injection.clone();
 
-    let mut injection = InjectionBuilder::new()
-        .path(option.path)?
-        .pid(option.pid)?
-        .mount()?;
+    namespace::with_mnt_namespace(box move || -> Result<()> {
+        mount_injection.lock().unwrap().mount()?;
+        return Ok(())
+    }, option.pid)?;
 
-    injection.reopen()?;
+    injection.lock().unwrap().reopen()?;
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
@@ -48,7 +51,12 @@ fn main() -> Result<()> {
     signals.forever().next();
     info!("start to recover and exit");
 
-    injection.recover()?;
+    injection.lock().unwrap().reopen()?;
+    let mount_injection = injection.clone();
+    namespace::with_mnt_namespace(box move || -> Result<()> {
+        mount_injection.lock().unwrap().recover_mount()?;
+        return Ok(())
+    }, option.pid)?;
     info!("recover successfully");
     return Ok(());
 }
