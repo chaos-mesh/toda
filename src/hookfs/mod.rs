@@ -11,7 +11,7 @@ use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{LinkatFlags, linkat, symlinkat, unlink, mkdir, write, fsync, lseek, read, Whence, AccessFlags, chown, Uid, Gid, truncate};
 use nix::dir;
 
-use tracing::{debug, trace};
+use tracing::{debug, trace, error};
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
@@ -204,7 +204,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -253,7 +253,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -348,7 +348,7 @@ impl Filesystem for HookFs {
         let mode = match stat::Mode::from_bits(mode) {
             Some(mode) => mode,
             None => {
-                debug!("unavailable mode: {}", mode);
+                error!("unavailable mode: {}", mode);
                 reply.error(-1);
                 return
             }
@@ -477,7 +477,7 @@ impl Filesystem for HookFs {
         reply: fuse::ReplyEmpty,
     ) {
         trace!("rename");
-        debug!("unimplimented");
+        error!("unimplimented");
         reply.error(nix::libc::ENOSYS);
     }
     #[tracing::instrument(skip(req))]
@@ -812,7 +812,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -869,7 +869,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -917,7 +917,6 @@ impl Filesystem for HookFs {
         }
 
         if size == 0 {
-            debug!("may error because of 0 size in getxattr");
             trace!("return with size {}", ret);
             reply.size(ret as u32);
         } else {
@@ -931,7 +930,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -966,7 +965,6 @@ impl Filesystem for HookFs {
         }
 
         if size == 0 {
-            debug!("may error because of 0 size in getxattr");
             trace!("return with size {}", ret);
             reply.size(ret as u32);
         } else {
@@ -986,7 +984,7 @@ impl Filesystem for HookFs {
         let path = match self.inode_map.get(&ino) {
             Some(path) => path.as_path(),
             None => {
-                debug!("cannot find inode({}) in inode_map", ino);
+                error!("cannot find inode({}) in inode_map", ino);
                 reply.error(-1);
                 return
             }
@@ -1159,7 +1157,7 @@ impl Filesystem for HookFs {
         _idx: u64,
         reply: fuse::ReplyBmap,
     ) {
-        debug!("unimplemented");
+        error!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
 }

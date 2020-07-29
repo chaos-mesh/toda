@@ -144,7 +144,7 @@ impl Injection {
 
         let flags = thread.fcntl(fd, FcntlArg::F_GETFL)?;
 
-        let flags = unsafe {OFlag::from_bits_unchecked(flags as i32)};
+        let flags = OFlag::from_bits_truncate(flags as i32);
 
         let new_open_fd = thread.open(original_path, flags, Mode::empty())?;
         thread.dup2(new_open_fd, fd)?;

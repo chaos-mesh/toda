@@ -16,6 +16,7 @@ use tracing_subscriber;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, Arc};
+use std::str::FromStr;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -25,13 +26,18 @@ struct Options {
 
     #[structopt(long)]
     path: PathBuf,
+
+    #[structopt(short = "v", long = "verbose", default_value = "trace")]
+    verbose: String,
 }
 
 fn main() -> Result<()> {
     let option = Options::from_args();
 
+    let verbose = Level::from_str(&option.verbose)?;
+
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_max_level(verbose)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
