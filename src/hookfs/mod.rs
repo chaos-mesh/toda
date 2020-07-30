@@ -24,12 +24,10 @@ use tracing::{debug, error, trace};
 
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
-use std::ops::{Deref, DerefMut};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use futures::{Future, FutureExt};
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
@@ -105,27 +103,9 @@ impl<T> FhMap<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deref, DerefMut, From)]
 struct Dir(dir::Dir);
 
-impl Deref for Dir {
-    type Target = dir::Dir;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Dir {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl From<dir::Dir> for Dir {
-    fn from(dir: dir::Dir) -> Self {
-        Dir(dir)
-    }
-}
 
 unsafe impl Send for Dir {}
 unsafe impl Sync for Dir {}
@@ -328,7 +308,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn mkdir(&self, parent: u64, name: OsString, mode: u32) -> Result<Entry> {
         trace!("mkdir");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;;
+        let parent_path = inode_map.get_path(parent)?;
         let path = parent_path.join(&name);
 
         let mode = stat::Mode::from_bits_truncate(mode);
@@ -339,7 +319,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn unlink(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("unlink");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;;
+        let parent_path = inode_map.get_path(parent)?;
         let path = parent_path.join(name);
         unlink(&path)?;
         Ok(())
@@ -348,7 +328,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn rmdir(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("rmdir");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;;
+        let parent_path = inode_map.get_path(parent)?;
         let path = parent_path.join(name);
 
         let path = CString::new(path.as_os_str().as_bytes())?;
@@ -366,7 +346,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
         trace!("symlink");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;;
+        let parent_path = inode_map.get_path(parent)?;
         let path = parent_path.join(&name);
 
         trace!("create symlink: {} => {}", path.display(), link.display());
