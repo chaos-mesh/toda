@@ -1,6 +1,8 @@
 #![feature(box_syntax)]
 #![feature(async_closure)]
 
+extern crate derive_more;
+
 mod hookfs;
 mod inject;
 mod mount;

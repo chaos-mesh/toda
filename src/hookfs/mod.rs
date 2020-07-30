@@ -5,12 +5,13 @@ mod reply;
 use async_trait::async_trait;
 use fuse::*;
 use time::Timespec;
+use derive_more::{Deref, DerefMut, From};
 
 use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
 
 use nix::dir;
 use nix::errno::Errno;
-use nix::fcntl::{open, readlink, OFlag};
+use nix::fcntl::{renameat, open, readlink, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
@@ -28,6 +29,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use futures::{Future, FutureExt};
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
@@ -76,12 +78,31 @@ pub struct HookFs {
     mount_path: Arc<PathBuf>,
     original_path: Arc<PathBuf>,
 
-    opened_files: Arc<RwLock<CounterMap<RawFd>>>,
+    opened_files: Arc<RwLock<FhMap<RawFd>>>,
 
-    opened_dirs: Arc<RwLock<CounterMap<Dir>>>,
+    opened_dirs: Arc<RwLock<FhMap<Dir>>>,
 
     // map from inode to real path
-    inode_map: Arc<RwLock<HashMap<u64, PathBuf>>>,
+    inode_map: Arc<RwLock<InodeMap>>,
+}
+
+#[derive(Debug, Deref, DerefMut, From)]
+struct InodeMap(HashMap<u64, PathBuf>);
+
+impl InodeMap {
+    fn get_path(&self, inode: u64) -> Result<&Path> {
+        self.0.get(&inode).map(|item| item.as_path())
+                    .ok_or(Error::InodeNotFound{inode})
+    }
+}
+
+#[derive(Debug, Deref, DerefMut, From)]
+struct FhMap<T>(CounterMap<T>);
+
+impl<T> FhMap<T> {
+    fn get(&self, key: usize) -> Result<&T> {
+        self.0.get(key).ok_or(Error::FhNotFound{fh:key as u64})
+    }
 }
 
 #[derive(Debug)]
@@ -111,7 +132,7 @@ unsafe impl Sync for Dir {}
 
 impl HookFs {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(mount_path: P1, original_path: P2) -> HookFs {
-        let mut inode_map = HashMap::new();
+        let mut inode_map = InodeMap::from(HashMap::new());
         inode_map.insert(1, original_path.as_ref().to_owned());
 
         let inode_map = Arc::new(RwLock::new(inode_map));
@@ -119,8 +140,8 @@ impl HookFs {
         return HookFs {
             mount_path: Arc::new(mount_path.as_ref().to_owned()),
             original_path: Arc::new(original_path.as_ref().to_owned()),
-            opened_files: Arc::new(RwLock::new(CounterMap::new())),
-            opened_dirs: Arc::new(RwLock::new(CounterMap::new())),
+            opened_files: Arc::new(RwLock::new(FhMap::from(CounterMap::new()))),
+            opened_dirs: Arc::new(RwLock::new(FhMap::from(CounterMap::new()))),
             inode_map,
         };
     }
@@ -177,9 +198,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let path = {
             let inode_map = self.inode_map.read().await;
-            let parent_path = inode_map
-                .get(&parent)
-                .ok_or(Error::InodeNotFound { inode: parent })?;
+            let parent_path = inode_map.get_path(parent)?;
             parent_path.join(name)
         };
 
@@ -206,9 +225,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("getattr");
 
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let stat = stat::lstat(path)?;
 
@@ -238,9 +255,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("setattr");
 
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         chown(
             path,
@@ -274,9 +289,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let path = readlink(path)?;
 
@@ -294,8 +307,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let inode_map = self.inode_map.read().await;
         let parent_path = inode_map
-            .get(&parent)
-            .ok_or(Error::InodeNotFound { inode: parent })?;
+            .get_path(parent)?;
         let path = parent_path.join(&name);
         let path = CString::new(path.as_os_str().as_bytes())?;
 
@@ -307,7 +319,7 @@ impl AsyncFileSystemImpl for HookFs {
             libc::mknod(path_ptr, mode, rdev as u64)
         };
         if ret == -1 {
-            return Err(Error::from(nix::Error::last()));
+            return Err(Error::last());
         }
         self.lookup(parent, name).await
     }
@@ -316,9 +328,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn mkdir(&self, parent: u64, name: OsString, mode: u32) -> Result<Entry> {
         trace!("mkdir");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map
-            .get(&parent)
-            .ok_or(Error::InodeNotFound { inode: parent })?;
+        let parent_path = inode_map.get_path(parent)?;;
         let path = parent_path.join(&name);
 
         let mode = stat::Mode::from_bits_truncate(mode);
@@ -329,9 +339,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn unlink(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("unlink");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map
-            .get(&parent)
-            .ok_or(Error::InodeNotFound { inode: parent })?;
+        let parent_path = inode_map.get_path(parent)?;;
         let path = parent_path.join(name);
         unlink(&path)?;
         Ok(())
@@ -340,9 +348,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn rmdir(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("rmdir");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map
-            .get(&parent)
-            .ok_or(Error::InodeNotFound { inode: parent })?;
+        let parent_path = inode_map.get_path(parent)?;;
         let path = parent_path.join(name);
 
         let path = CString::new(path.as_os_str().as_bytes())?;
@@ -351,7 +357,7 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { libc::rmdir(path_ptr) };
 
         if ret == -1 {
-            Err(Error::from(nix::Error::last()))
+            Err(Error::last())
         } else {
             Ok(())
         }
@@ -360,9 +366,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
         trace!("symlink");
         let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map
-            .get(&parent)
-            .ok_or(Error::InodeNotFound { inode: parent })?;
+        let parent_path = inode_map.get_path(parent)?;;
         let path = parent_path.join(&name);
 
         trace!("create symlink: {} => {}", path.display(), link.display());
@@ -379,20 +383,24 @@ impl AsyncFileSystemImpl for HookFs {
         newname: OsString,
     ) -> Result<()> {
         trace!("rename");
-        error!("unimplimented");
+        let inode_map = self.inode_map.read().await;
+        let parent_path = inode_map.get_path(parent)?;
+        let path = parent_path.join(&name);
+
+        let new_parent_path = inode_map.get_path(newparent)?;
+        let new_path = new_parent_path.join(&newname);
+
+        renameat(None, &path, None, &new_path)?;
+
         Err(Error::Sys(Errno::ENOSYS))
     }
     #[tracing::instrument]
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
         trace!("link");
         let inode_map = self.inode_map.read().await;
-        let original_path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let original_path = inode_map.get_path(ino)?;
 
-        let new_parent_path = inode_map
-            .get(&newparent)
-            .ok_or(Error::InodeNotFound { inode: newparent })?;
+        let new_parent_path = inode_map.get_path(newparent)?;
         let new_path = new_parent_path.join(&newname);
 
         linkat(
@@ -413,9 +421,7 @@ impl AsyncFileSystemImpl for HookFs {
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         trace!("open with flags: {:?}", filtered_flags);
         let fd = open(path, filtered_flags, stat::Mode::S_IRWXU)?;
@@ -432,8 +438,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("read");
         let opened_files = self.opened_files.read().await;
         let fd: RawFd = *opened_files
-            .get(fh as usize)
-            .ok_or(Error::FhNotFound { fh })?;
+            .get(fh as usize)?;
         lseek(fd, offset, Whence::SeekSet)?;
 
         let mut buf = Vec::new();
@@ -455,7 +460,7 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<Write> {
         trace!("write");
         let opened_files = self.opened_files.read().await;
-        let fd: RawFd = *opened_files.get(fh as usize).ok_or(Error::FhNotFound{fh})?;
+        let fd: RawFd = *opened_files.get(fh as usize)?;
 
         lseek(fd, offset, Whence::SeekSet)?;
 
@@ -469,8 +474,7 @@ impl AsyncFileSystemImpl for HookFs {
         // flush is implemented with fsync. Is it the correct way?
         let opened_files = self.opened_files.read().await;
         let fd: RawFd = *opened_files
-            .get(fh as usize)
-            .ok_or(Error::FhNotFound { fh })?;
+            .get(fh as usize)?;
         fsync(fd)?;
         Ok(())
     }
@@ -493,8 +497,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("fsync");
         let opened_files = self.opened_files.read().await;
         let fd: RawFd = *opened_files
-            .get(fh as usize)
-            .ok_or(Error::FhNotFound { fh })?;
+            .get(fh as usize)?;
 
         fsync(fd)?;
 
@@ -504,9 +507,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn opendir(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("opendir");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
@@ -615,9 +616,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("setxattr");
 
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -630,7 +629,7 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
 
         if ret == -1 {
-            return Err(Error::from(nix::Error::last()));
+            return Err(Error::last());
         }
         Ok(())
     }
@@ -638,7 +637,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn getxattr(&self, ino: u64, name: OsString, size: u32) -> Result<Xattr> {
         trace!("getxattr");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map.get(&ino).ok_or(Error::InodeNotFound{inode: ino})?;
+        let path = inode_map.get_path(ino)?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -653,7 +652,7 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
-            return Err(Error::from(nix::Error::last()))
+            return Err(Error::last())
         }
 
         if size == 0 {
@@ -668,7 +667,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
         trace!("listxattr");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map.get(&ino).ok_or(Error::InodeNotFound{inode: ino})?;
+        let path = inode_map.get_path(ino)?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -680,7 +679,7 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { llistxattr(path_ptr, buf_ptr, size as usize) };
 
         if ret == -1 {
-            return Err(Error::from(nix::Error::last()))
+            return Err(Error::last())
         }
 
         if size == 0 {
@@ -693,9 +692,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()> {
         trace!("removexattr");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -706,7 +703,7 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = unsafe { lremovexattr(path_ptr, name_ptr) };
 
         if ret == -1 {
-            return Err(Error::from(nix::Error::last()));
+            return Err(Error::last());
         }
         Ok(())
     }
@@ -714,9 +711,7 @@ impl AsyncFileSystemImpl for HookFs {
     async fn access(&self, ino: u64, mask: u32) -> Result<()> {
         trace!("access");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map
-            .get(&ino)
-            .ok_or(Error::InodeNotFound { inode: ino })?;
+        let path = inode_map.get_path(ino)?;
 
         let mask = AccessFlags::from_bits_truncate(mask as i32);
         nix::unistd::access(path, mask)?;
@@ -728,7 +723,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create");
         let path = {
             let inode_map = self.inode_map.read().await;
-            let parent_path = inode_map.get(&parent).ok_or(Error::InodeNotFound{inode: parent})?;
+            let parent_path = inode_map.get_path(parent)?;
             parent_path.join(name)
         };
 

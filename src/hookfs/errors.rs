@@ -25,6 +25,12 @@ pub enum HookFsError {
 
 pub type Result<T> = std::result::Result<T, HookFsError>;
 
+impl HookFsError {
+    pub fn last() -> HookFsError {
+        HookFsError::from(nix::Error::last())
+    }
+}
+
 impl From<nix::Error> for HookFsError {
     fn from(err: Error) -> HookFsError {
         // TODO: match more error types
