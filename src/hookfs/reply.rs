@@ -1,6 +1,6 @@
 use fuse::*;
 use time::{get_time, Timespec};
-use tracing::{debug, trace};
+use tracing::{debug, trace, error};
 
 use super::errors::Result;
 
@@ -145,7 +145,12 @@ pub trait FsReply<T: Debug>: Sized {
             }
             Err(err) => {
                 debug!("err. reply with {}", err);
-                self.reply_err(err.into())
+
+                let err = err.into();
+                if err == -1 {
+                    error!("returned -1");
+                }
+                self.reply_err(err)
             }
         }
     }

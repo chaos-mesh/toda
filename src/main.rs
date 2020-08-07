@@ -42,16 +42,17 @@ fn main() -> Result<()> {
     let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
-    let injection = Arc::new(Mutex::new(Injection::create_injection(
-        option.path,
-        option.pid,
-    )?));
-    let mount_injection = injection.clone();
+    let path = option.path;
+    let pid = option.pid;
+    let injection = namespace::with_mnt_namespace(
+        box move || -> Result<_> {
+            let injection = Arc::new(Mutex::new(Injection::create_injection(
+                &path,
+                pid,
+            )?));
 
-    namespace::with_mnt_namespace(
-        box move || -> Result<()> {
-            mount_injection.lock().unwrap().mount()?;
-            return Ok(());
+            injection.lock().unwrap().mount()?;
+            return Ok(injection);
         },
         option.pid,
     )?;

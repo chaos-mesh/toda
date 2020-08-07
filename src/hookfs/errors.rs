@@ -47,6 +47,12 @@ impl From<std::ffi::NulError> for HookFsError {
     }
 }
 
+impl From<std::io::Error> for HookFsError {
+    fn from(_: std::io::Error) -> HookFsError {
+        HookFsError::UnknownError
+    }
+}
+
 impl Into<libc::c_int> for HookFsError {
     fn into(self) -> libc::c_int {
         use HookFsError::*;

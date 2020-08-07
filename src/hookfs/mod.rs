@@ -106,6 +106,8 @@ impl<T> FhMap<T> {
 #[derive(Debug, Deref, DerefMut, From)]
 struct Dir(dir::Dir);
 
+pub struct File();
+
 
 unsafe impl Send for Dir {}
 unsafe impl Sync for Dir {}
@@ -181,12 +183,14 @@ impl AsyncFileSystemImpl for HookFs {
             let parent_path = inode_map.get_path(parent)?;
             parent_path.join(name)
         };
+        trace!("lookup in {}", path.display());
 
         let stat = stat::lstat(&path)?;
 
         let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
-        self.inode_map.write().await.insert(stat.ino, path);
+        trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
+        self.inode_map.write().await.entry(stat.ino).or_insert(path);
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with {:?}", stat);
@@ -206,6 +210,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?;
+        trace!("getting attr from path {}", path.display());
 
         let stat = stat::lstat(path)?;
 
@@ -284,11 +289,13 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn mknod(&self, parent: u64, name: OsString, mode: u32, rdev: u32) -> Result<Entry> {
         trace!("mknod");
-
-        let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map
-            .get_path(parent)?;
-        let path = parent_path.join(&name);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            let parent_path = inode_map
+                .get_path(parent)?;
+            parent_path.join(&name)
+        };
         let path = CString::new(path.as_os_str().as_bytes())?;
 
         trace!("mknod for {:?}", path);
@@ -307,9 +314,12 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn mkdir(&self, parent: u64, name: OsString, mode: u32) -> Result<Entry> {
         trace!("mkdir");
-        let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;
-        let path = parent_path.join(&name);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            let parent_path = inode_map.get_path(parent)?;
+            parent_path.join(&name)
+        };
 
         let mode = stat::Mode::from_bits_truncate(mode);
         mkdir(&path, mode)?;
@@ -318,18 +328,29 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn unlink(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("unlink");
-        let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;
-        let path = parent_path.join(name);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            let parent_path = inode_map.get_path(parent)?;
+            parent_path.join(name)
+        };
+
+        let stat = stat::lstat(&path)?;
+        self.inode_map.write().await.remove(&stat.st_ino);
+
+        trace!("unlinking {}", path.display());
         unlink(&path)?;
         Ok(())
     }
     #[tracing::instrument]
     async fn rmdir(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("rmdir");
-        let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;
-        let path = parent_path.join(name);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            let parent_path = inode_map.get_path(parent)?;
+            parent_path.join(name)
+        };
 
         let path = CString::new(path.as_os_str().as_bytes())?;
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -345,9 +366,12 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
         trace!("symlink");
-        let inode_map = self.inode_map.read().await;
-        let parent_path = inode_map.get_path(parent)?;
-        let path = parent_path.join(&name);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            let parent_path = inode_map.get_path(parent)?;
+            parent_path.join(&name)
+        };
 
         trace!("create symlink: {} => {}", path.display(), link.display());
         symlinkat(link.as_path(), None, &path)?;
@@ -363,33 +387,47 @@ impl AsyncFileSystemImpl for HookFs {
         newname: OsString,
     ) -> Result<()> {
         trace!("rename");
-        let inode_map = self.inode_map.read().await;
+        
+        let mut inode_map = self.inode_map.write().await;
         let parent_path = inode_map.get_path(parent)?;
         let path = parent_path.join(&name);
+
+        trace!("get original path: {}", path.display());
 
         let new_parent_path = inode_map.get_path(newparent)?;
         let new_path = new_parent_path.join(&newname);
 
+        trace!("get new path: {}", new_path.display());
+
+        trace!("rename from {} to {}", path.display(), new_path.display());
+
         renameat(None, &path, None, &new_path)?;
 
-        Err(Error::Sys(Errno::ENOSYS))
+        let stat = stat::lstat(&new_path)?;
+
+        trace!("insert inode_map ({}, {})", stat.st_ino, new_path.display());
+        inode_map.insert(stat.st_ino, new_path);
+
+        Ok(())
     }
     #[tracing::instrument]
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
         trace!("link");
-        let inode_map = self.inode_map.read().await;
-        let original_path = inode_map.get_path(ino)?;
+        {
+            let inode_map = self.inode_map.read().await;
+            let original_path = inode_map.get_path(ino)?;
 
-        let new_parent_path = inode_map.get_path(newparent)?;
-        let new_path = new_parent_path.join(&newname);
+            let new_parent_path = inode_map.get_path(newparent)?;
+            let new_path = new_parent_path.join(&newname);
 
-        linkat(
-            None,
-            original_path,
-            None,
-            &new_path,
-            LinkatFlags::NoSymlinkFollow,
-        )?;
+            linkat(
+                None,
+                original_path,
+                None,
+                &new_path,
+                LinkatFlags::NoSymlinkFollow,
+            )?;
+        }
         self.lookup(newparent, newname).await
     }
     #[tracing::instrument]
@@ -468,6 +506,7 @@ impl AsyncFileSystemImpl for HookFs {
         flush: bool,
     ) -> Result<()> {
         trace!("release");
+        // FIXME: implement release
         let mut opened_files = self.opened_files.write().await;
         opened_files.delete(fh as usize);
         Ok(())
@@ -501,15 +540,26 @@ impl AsyncFileSystemImpl for HookFs {
     }
 
     #[tracing::instrument]
-    async fn readdir(&self, ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
+    async fn readdir(&self, ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory){
         trace!("readdir");
+        let parent_path = {
+            let inode_map = self.inode_map.read().await;
+            match inode_map.get_path(ino) {
+                Ok(path) => path.to_owned(),
+                Err(err) => {
+                    error!("cannot find inode {} in inode_map", ino);
+                    reply.error(err.into());
+                    return
+                }
+            }
+        };
         let offset = offset as usize;
 
         let mut opened_dirs = self.opened_dirs.write().await;
         let dir = match opened_dirs.get_mut(fh as usize) {
             Some(dir) => dir,
             None => {
-                trace!("cannot find fh {} in opened_dirs", fh);
+                error!("cannot find fh {} in opened_dirs", fh);
                 reply.error(libc::EFAULT);
                 return;
             }
@@ -544,6 +594,11 @@ impl AsyncFileSystemImpl for HookFs {
                     return;
                 }
             };
+
+            let path = parent_path.join(name);
+            trace!("insert ({}, {}) into inode_map", entry.ino(), path.display());
+            self.inode_map.write().await.entry(entry.ino()).or_insert(path);
+
             if !reply.add(entry.ino(), (index + 1) as i64, file_type, name) {
                 trace!("add file {:?}", entry);
             } else {
@@ -559,7 +614,8 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn releasedir(&self, ino: u64, fh: u64, flags: u32) -> Result<()> {
         trace!("releasedir");
-        self.opened_dirs.write().await.delete(fh as usize);
+        // FIXME: please implement releasedir
+        // self.opened_dirs.write().await.delete(fh as usize);
         Ok(())
     }
     #[tracing::instrument]
