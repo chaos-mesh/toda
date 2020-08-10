@@ -79,6 +79,7 @@ fn main() -> Result<()> {
         box move || -> Result<()> {
             info!("recovering mount");
 
+            // TODO: retry umount multiple times
             mount_injection.recover_mount()?;
             return Ok(());
         },

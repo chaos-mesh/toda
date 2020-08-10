@@ -115,7 +115,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn access(&self, ino: u64, mask: u32) -> Result<()>;
 
-    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32) -> Result<Create>;
+    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32, uid: u32, gid: u32) -> Result<Create>;
 
     async fn getlk(
         &self,
@@ -472,17 +472,20 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn create(
         &mut self,
-        _req: &Request,
+        req: &Request,
         parent: u64,
         name: &std::ffi::OsStr,
         mode: u32,
         flags: u32,
         reply: ReplyCreate,
     ) {
+        let uid = req.uid();
+        let gid = req.gid();
+
         let async_impl = self.inner.clone();
         let name = name.to_owned();
         self.spawn(reply, async move {
-            async_impl.create(parent, name, mode, flags).await
+            async_impl.create(parent, name, mode, flags, uid, gid).await
         });
     }
     fn getlk(

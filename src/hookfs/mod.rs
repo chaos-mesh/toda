@@ -16,7 +16,7 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
+    fchown, chown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
     LinkatFlags, Uid,
 };
 
@@ -790,7 +790,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
     #[tracing::instrument]
-    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32) -> Result<Create> {
+    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32, uid: u32, gid: u32) -> Result<Create> {
         trace!("create");
         let path = {
             let inode_map = self.inode_map.read().await;
@@ -806,6 +806,12 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
 
         let fd = open(&path, filtered_flags, mode)?;
+        trace!("setting owner {}:{} for file", uid, gid);
+        fchown(
+            fd,
+            Some(Uid::from_raw(uid)),
+            Some(Gid::from_raw(gid)),
+        )?;
 
         let stat = stat::lstat(&path)?;
 

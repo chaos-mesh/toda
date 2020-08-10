@@ -57,7 +57,7 @@ impl MountInjector {
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 
-            let args = ["allow_other", "nonempty", "fsname=chaos"];
+            let args = ["allow_other", "nonempty", "fsname=toda", "default_permissions"];
             let flags: Vec<_> = args.iter().flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)]).collect();
 
             trace!("mount with flags {:?}", flags);
