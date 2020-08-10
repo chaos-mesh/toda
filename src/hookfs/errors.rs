@@ -40,7 +40,7 @@ impl From<nix::Error> for HookFsError {
         match err {
             Error::Sys(errno) => HookFsError::Sys(errno),
             _ => {
-                error!("unknown error");
+                error!("unknown error {:?}", err);
                 HookFsError::UnknownError
             },
         }
@@ -55,8 +55,8 @@ impl From<std::ffi::NulError> for HookFsError {
 
 impl From<std::io::Error> for HookFsError {
     #[tracing::instrument]
-    fn from(_: std::io::Error) -> HookFsError {
-        error!("unknown error");
+    fn from(err: std::io::Error) -> HookFsError {
+        error!("unknown error {:?}", err);
         HookFsError::UnknownError
     }
 }

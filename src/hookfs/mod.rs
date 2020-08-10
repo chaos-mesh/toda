@@ -441,9 +441,13 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn open(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("open");
+        // TODO: support direct io
+        if flags & (libc::O_DIRECT as u32) != 0 {
+            debug!("direct io flag is ignored directly")
+        }
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
-        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!(libc::O_DIRECT as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         let inode_map = self.inode_map.read().await;
@@ -484,11 +488,10 @@ impl AsyncFileSystemImpl for HookFs {
                 return Err(err.into())
             }
         }
-        trace!("return with data: {:?}", buf);
 
         Ok(Data::new(buf))
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(data))]
     async fn write(
         &self,
         ino: u64,
