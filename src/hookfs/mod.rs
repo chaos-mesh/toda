@@ -20,14 +20,18 @@ use nix::unistd::{
     LinkatFlags, Uid, Whence,
 };
 
+use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tracing::{debug, error, trace};
 
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{RawFd, AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::io::SeekFrom;
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
@@ -76,7 +80,7 @@ pub struct HookFs {
     mount_path: Arc<PathBuf>,
     original_path: Arc<PathBuf>,
 
-    opened_files: Arc<RwLock<FhMap<RawFd>>>,
+    opened_files: Arc<RwLock<FhMap<File>>>,
 
     opened_dirs: Arc<RwLock<FhMap<Dir>>>,
 
@@ -101,12 +105,16 @@ impl<T> FhMap<T> {
     fn get(&self, key: usize) -> Result<&T> {
         self.0.get(key).ok_or(Error::FhNotFound{fh:key as u64})
     }
+    fn get_mut(&mut self, key: usize) -> Result<&mut T> {
+        self.0.get_mut(key).ok_or(Error::FhNotFound{fh:key as u64})
+    }
 }
 
 #[derive(Debug, Deref, DerefMut, From)]
 struct Dir(dir::Dir);
 
-pub struct File();
+#[derive(Debug, Deref, DerefMut, From)]
+pub struct File(fs::File);
 
 
 unsafe impl Send for Dir {}
@@ -444,7 +452,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("open with flags: {:?}", filtered_flags);
         let fd = open(path, filtered_flags, stat::Mode::S_IRWXU)?;
 
-        let fh = self.opened_files.write().await.insert(fd) as u64;
+        let std_file = unsafe {std::fs::File::from_raw_fd(fd)};
+        let file = fs::File::from_std(std_file);
+        let fh = self.opened_files.write().await.insert(File::from(file)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 
@@ -454,15 +464,25 @@ impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
     async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
         trace!("read");
-        let opened_files = self.opened_files.read().await;
-        let fd: RawFd = *opened_files
-            .get(fh as usize)?;
-        lseek(fd, offset, Whence::SeekSet)?;
+        let mut opened_files = self.opened_files.write().await;
+        let file = opened_files.get_mut(fh as usize)?;
+        
+        trace!("seek to {}", offset);
+        file.seek(SeekFrom::Start(offset as u64)).await?;
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0);
 
-        read(fd, &mut buf)?;
+        trace!("read exact");
+        match file.read_exact(&mut buf).await {
+            Ok(_) => {},
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                trace!("read eof");
+            }
+            Err(err) => {
+                return Err(err.into())
+            }
+        }
         trace!("return with data: {:?}", buf);
 
         Ok(Data::new(buf))
@@ -477,22 +497,22 @@ impl AsyncFileSystemImpl for HookFs {
         flags: u32,
     ) -> Result<Write> {
         trace!("write");
-        let opened_files = self.opened_files.read().await;
-        let fd: RawFd = *opened_files.get(fh as usize)?;
+        let mut opened_files = self.opened_files.write().await;
+        let file = opened_files.get_mut(fh as usize)?;
 
-        lseek(fd, offset, Whence::SeekSet)?;
+        file.seek(SeekFrom::Start(offset as u64)).await?;
 
-        let size = write(fd, &data)?;
+        file.write_all(&data).await?;
 
-        Ok(Write::new(size as u32))
+        Ok(Write::new(data.len() as u32))
     }
     #[tracing::instrument]
     async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()> {
         trace!("flush");
         // flush is implemented with fsync. Is it the correct way?
         let opened_files = self.opened_files.read().await;
-        let fd: RawFd = *opened_files
-            .get(fh as usize)?;
+        let fd: RawFd = opened_files
+            .get(fh as usize)?.as_raw_fd();
         fsync(fd)?;
         Ok(())
     }
@@ -515,8 +535,8 @@ impl AsyncFileSystemImpl for HookFs {
     async fn fsync(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
         trace!("fsync");
         let opened_files = self.opened_files.read().await;
-        let fd: RawFd = *opened_files
-            .get(fh as usize)?;
+        let fd: RawFd = opened_files
+            .get(fh as usize)?.as_raw_fd();
 
         fsync(fd)?;
 
@@ -557,10 +577,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut opened_dirs = self.opened_dirs.write().await;
         let dir = match opened_dirs.get_mut(fh as usize) {
-            Some(dir) => dir,
-            None => {
-                error!("cannot find fh {} in opened_dirs", fh);
-                reply.error(libc::EFAULT);
+            Ok(dir) => dir,
+            Err(err) => {
+                reply.error(err.into());
                 return;
             }
         };
@@ -778,7 +797,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         self.inode_map.write().await.insert(stat.ino, path);
 
-        let fh = self.opened_files.write().await.insert(fd);
+        let std_file = unsafe {std::fs::File::from_raw_fd(fd)};
+        let file = fs::File::from_std(std_file);
+        let fh = self.opened_files.write().await.insert(File::from(file));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
