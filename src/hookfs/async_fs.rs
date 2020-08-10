@@ -14,6 +14,10 @@ use std::{
 
 #[async_trait]
 pub trait AsyncFileSystemImpl: Clone + Send + Sync {
+    fn init(&self) -> Result<()>;
+
+    fn destroy(&self);
+
     async fn lookup(&self, parent: u64, name: OsString) -> Result<Entry>;
 
     async fn forget(&self, ino: u64, nlookup: u64);
@@ -180,10 +184,12 @@ impl<T: AsyncFileSystemImpl> AsyncFileSystem<T> {
 
 impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     fn init(&mut self, _req: &fuse::Request) -> std::result::Result<(), nix::libc::c_int> {
-        Ok(())
+        self.inner.init().map_err(|err| err.into())
     }
 
-    fn destroy(&mut self, _req: &fuse::Request) {}
+    fn destroy(&mut self, _req: &fuse::Request) {
+        self.inner.destroy()
+    }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEntry) {
         let async_impl = self.inner.clone();

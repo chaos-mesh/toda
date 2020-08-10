@@ -10,7 +10,7 @@ use nix::fcntl::FcntlArg;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 
-use tracing::trace;
+use tracing::{trace, info};
 
 #[derive(PartialEq, Debug)]
 enum MountDirection {
@@ -124,7 +124,6 @@ impl FdReplacer {
 
     #[tracing::instrument(skip(self, thread, path))]
     fn reopen_file<P: AsRef<Path>>(&self, thread: &ptrace::TracedThread, fd: u64, path: P) -> Result<()> {
-        trace!("reopen fd: {} for pid", fd);
 
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
@@ -140,9 +139,13 @@ impl FdReplacer {
             self.new_path.join(striped_path)
         };
 
+        info!("reopen fd: {} for pid {}, from {} to {}", fd, thread.tid, path.as_ref().display(), original_path.display());
+
         let flags = thread.fcntl(fd, FcntlArg::F_GETFL)?;
 
         let flags = OFlag::from_bits_truncate(flags as i32);
+
+        info!("fcntl get flags {:?}", flags);
 
         let new_open_fd = thread.open(original_path, flags, Mode::empty())?;
         thread.dup2(new_open_fd, fd)?;

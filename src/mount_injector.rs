@@ -1,6 +1,8 @@
 use crate::hookfs;
 use crate::mount;
+
 use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
 
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
@@ -55,7 +57,11 @@ impl MountInjector {
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 
-            fuse::spawn_mount(fs, &self.original_path, &[])?
+            let args = ["allow_other", "nonempty", "fsname=chaos"];
+            let flags: Vec<_> = args.iter().flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)]).collect();
+
+            trace!("mount with flags {:?}", flags);
+            fuse::spawn_mount(fs, &self.original_path, &flags)?
         };
         trace!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up

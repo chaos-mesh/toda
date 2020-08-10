@@ -183,6 +183,18 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
 #[async_trait]
 impl AsyncFileSystemImpl for HookFs {
     #[tracing::instrument]
+    fn init(&self) -> Result<()> {
+        trace!("init");
+
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    fn destroy(&self) {
+        trace!("destroy");
+    }
+
+    #[tracing::instrument]
     async fn lookup(&self, parent: u64, name: OsString) -> Result<Entry> {
         trace!("lookup");
 
