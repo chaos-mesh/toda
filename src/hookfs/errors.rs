@@ -2,6 +2,8 @@ use nix::errno::Errno;
 use nix::Error;
 use thiserror::Error;
 
+use tracing::error;
+
 #[derive(Error, Debug)]
 pub enum HookFsError {
     #[error("errno {0}")]
@@ -32,11 +34,15 @@ impl HookFsError {
 }
 
 impl From<nix::Error> for HookFsError {
+    #[tracing::instrument]
     fn from(err: Error) -> HookFsError {
         // TODO: match more error types
         match err {
             Error::Sys(errno) => HookFsError::Sys(errno),
-            _ => HookFsError::UnknownError,
+            _ => {
+                error!("unknown error");
+                HookFsError::UnknownError
+            },
         }
     }
 }
@@ -48,7 +54,9 @@ impl From<std::ffi::NulError> for HookFsError {
 }
 
 impl From<std::io::Error> for HookFsError {
+    #[tracing::instrument]
     fn from(_: std::io::Error) -> HookFsError {
+        error!("unknown error");
         HookFsError::UnknownError
     }
 }

@@ -16,12 +16,12 @@ pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     Ok(())
 }
 
-pub fn with_mnt_namespace<F: Fn() -> Result<R>, R>(f: Box<F>, pid: i32) -> Result<R> {
+pub fn with_mnt_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) -> Result<R> {
     let (sender, receiver) = channel::<Result<R>>();
 
     let args = Box::new((f, Box::new(sender), Box::new(pid)));
 
-    extern "C" fn callback<F: Fn() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
+    extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
         let args =
             unsafe { Box::from_raw(args as *mut (Box<F>, Box<Sender<Result<R>>>, Box<i32>)) };
         let (f, sender, pid) = *args;

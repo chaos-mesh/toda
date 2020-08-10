@@ -4,12 +4,14 @@
 extern crate derive_more;
 
 mod hookfs;
-mod inject;
+mod mount_injector;
 mod mount;
 mod namespace;
 mod ptrace;
+mod fd_replacer;
 
-use inject::Injection;
+use mount_injector::MountInjector;
+use fd_replacer::FdReplacer;
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
@@ -19,7 +21,6 @@ use tracing_subscriber;
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -44,20 +45,24 @@ fn main() -> Result<()> {
 
     let path = option.path;
     let pid = option.pid;
-    let injection = namespace::with_mnt_namespace(
-        box move || -> Result<_> {
-            let injection = Arc::new(Mutex::new(Injection::create_injection(
-                &path,
-                pid,
-            )?));
 
-            injection.lock().unwrap().mount()?;
+    let mut fdreplacer = FdReplacer::new(&path, pid)?;
+    fdreplacer.trace()?;
+
+    let mut mount_injection = namespace::with_mnt_namespace(
+        box move || -> Result<_> {
+            let mut injection =MountInjector::create_injection(
+                path,
+            )?;
+
+            injection.mount()?;
+            
             return Ok(injection);
         },
         option.pid,
     )?;
-
-    injection.lock().unwrap().reopen()?;
+    fdreplacer.reopen()?;
+    fdreplacer.detach()?;
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
@@ -65,15 +70,24 @@ fn main() -> Result<()> {
     signals.forever().next();
     info!("start to recover and exit");
 
-    injection.lock().unwrap().reopen()?;
-    let mount_injection = injection.clone();
+    fdreplacer.trace()?;
+    fdreplacer.reopen()?;
+
+    info!("fdreplace reopened");
+
     namespace::with_mnt_namespace(
         box move || -> Result<()> {
-            mount_injection.lock().unwrap().recover_mount()?;
+            info!("recovering mount");
+
+            mount_injection.recover_mount()?;
             return Ok(());
         },
         option.pid,
     )?;
+
+    fdreplacer.detach()?;
+    info!("fdreplace detached");
+    
     info!("recover successfully");
     return Ok(());
 }

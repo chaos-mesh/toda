@@ -1,15 +1,11 @@
-use crate::hookfs;
-use crate::mount;
 use crate::ptrace;
-use crate::ptrace::TracedThread;
 
+use std::path::{Path, PathBuf};
+use std::fmt::Debug;
 use std::fs::read_dir;
 use std::fs::read_link;
-use std::fs::rename;
-use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use fuse::BackgroundSession;
 use nix::fcntl::FcntlArg;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
@@ -22,18 +18,18 @@ enum MountDirection {
     DisableChaos,
 }
 
-#[derive(Debug)]
-pub struct Injection {
+pub struct FdReplacer {
     pid: i32,
     original_path: PathBuf,
     new_path: PathBuf,
-    fuse_session: Option<BackgroundSession<'static>>,
     direction: MountDirection,
-    mounts: mount::MountsInfo,
+
+    process: Option<ptrace::TracedProcess>,
 }
 
-impl Injection {
-    pub fn create_injection<P: AsRef<Path>>(path: P, pid: i32) -> Result<Injection> {
+impl FdReplacer {
+    #[tracing::instrument()]
+    pub fn new<P: AsRef<Path> + Debug>(path: P, pid: i32) -> Result<FdReplacer> {
         let original_path: PathBuf = path.as_ref().to_owned();
 
         let mut base_path: PathBuf = path.as_ref().to_owned();
@@ -50,47 +46,32 @@ impl Injection {
         let new_filename = format!("__chaosfs__{}__", original_filename);
         new_path.push(new_filename.as_str());
 
-        return Ok(Injection {
+        return Ok(FdReplacer {
             pid,
             original_path,
             new_path,
-            fuse_session: None,
             direction: MountDirection::EnableChaos,
-            mounts: mount::MountsInfo::parse_mounts()?,
+            process: None,
         });
     }
 
-    pub fn mount(&mut self) -> Result<()> {
-        if self.mounts.is_root(&self.original_path)? {
-            // TODO: make the parent mount points private before move mount points
-            self.mounts
-                .move_mount(&self.original_path, &self.new_path)?;
-        } else {
-            rename(&self.original_path, &self.new_path)?;
-        }
+    #[tracing::instrument(skip(self))]
+    pub fn trace(&mut self) -> Result<()> {
+        self.process = Some(ptrace::TracedProcess::trace(self.pid)?);
 
-        let fs =
-            hookfs::AsyncFileSystem::from(hookfs::HookFs::new(&self.original_path, &self.new_path));
-        let session = unsafe {
-            std::fs::create_dir_all(self.new_path.as_path())?;
-
-            fuse::spawn_mount(fs, &self.original_path, &[])?
-        };
-        trace!("wait 1 second");
-        // TODO: remove this. But wait for FUSE gets up
-        // Related Issue: https://github.com/zargony/fuse-rs/issues/9
-        std::thread::sleep(std::time::Duration::from_secs(1));
-
-        self.fuse_session = Some(session);
-
-        return Ok(());
+        Ok(())
     }
 
     #[tracing::instrument(skip(self))]
     pub fn reopen(&mut self) -> Result<()> {
         trace!("reopen fd for pid");
 
-        let process = ptrace::TracedProcess::trace(self.pid)?;
+        let process = match self.process.as_mut() {
+            Some(process) => process,
+            None => {
+                return Err(anyhow!("reopen is called before trace"))
+            }
+        };
 
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
@@ -115,8 +96,6 @@ impl Injection {
                     }
                 }
             }
-
-            thread.detach()?;
         }
 
         if self.direction == MountDirection::EnableChaos {
@@ -127,8 +106,24 @@ impl Injection {
         return Ok(());
     }
 
+    #[tracing::instrument(skip(self))]
+    pub fn detach(&mut self) -> Result<()> {
+        let process = match self.process.take() {
+            Some(process) => process,
+            None => {
+                return Err(anyhow!("reopen is called before trace"))
+            }
+        };
+
+        for thread in process.threads() {
+            thread.detach()?;
+        }
+
+        Ok(())
+    }
+
     #[tracing::instrument(skip(self, thread, path))]
-    fn reopen_file<P: AsRef<Path>>(&self, thread: &TracedThread, fd: u64, path: P) -> Result<()> {
+    fn reopen_file<P: AsRef<Path>>(&self, thread: &ptrace::TracedThread, fd: u64, path: P) -> Result<()> {
         trace!("reopen fd: {} for pid", fd);
 
         let base_path = if self.direction == MountDirection::EnableChaos {
@@ -152,23 +147,6 @@ impl Injection {
         let new_open_fd = thread.open(original_path, flags, Mode::empty())?;
         thread.dup2(new_open_fd, fd)?;
         thread.close(new_open_fd)?;
-
-        return Ok(());
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn recover_mount(&mut self) -> Result<()> {
-        let injection = self.fuse_session.take().unwrap();
-        drop(injection);
-
-        // TODO: replace the fd back and force remove the mount
-        if self.mounts.is_root(&self.original_path)? {
-            // TODO: make the parent mount points private before move mount points
-            self.mounts
-                .move_mount(&self.new_path, &self.original_path)?;
-        } else {
-            rename(&self.new_path, &self.original_path)?;
-        }
 
         return Ok(());
     }

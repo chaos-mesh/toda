@@ -26,7 +26,7 @@ impl MountsInfo {
         return Ok(MountsInfo { mounts });
     }
 
-    pub fn is_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
+    pub fn non_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
         let path = path
             .as_ref()
             .to_str()
@@ -34,7 +34,8 @@ impl MountsInfo {
 
         for mount_point in self.mounts.iter() {
             if mount_point.contains(path) {
-                // TODO: the relationship is not containing
+                // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still 
+                // use this method.
                 return Ok(true);
             }
         }

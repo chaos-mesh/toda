@@ -16,8 +16,8 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fsync, linkat, lseek, mkdir, read, symlinkat, truncate, unlink, write, AccessFlags, Gid,
-    LinkatFlags, Uid, Whence,
+    chown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
+    LinkatFlags, Uid,
 };
 
 use tokio::fs;
@@ -480,6 +480,7 @@ impl AsyncFileSystemImpl for HookFs {
                 trace!("read eof");
             }
             Err(err) => {
+                error!("unknown error: {}", err);
                 return Err(err.into())
             }
         }
