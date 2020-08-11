@@ -11,8 +11,9 @@ WORKDIR /toda-build
 
 COPY . .
 
-RUN --mount=type=cache,target=/root/.cargo \
+RUN --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/toda-build/target \
     cargo build --release
 
-RUN cp /toda-build/target/release/toda /toda
+RUN --mount=type=cache,target=/toda-build/target \
+    cp /toda-build/target/release/toda /toda
