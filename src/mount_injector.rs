@@ -1,5 +1,7 @@
 use crate::hookfs;
 use crate::mount;
+use crate::InjectorConfig;
+use crate::injector::MultiInjector;
 
 use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
@@ -15,10 +17,11 @@ pub struct MountInjector {
     new_path: PathBuf,
     fuse_session: Option<BackgroundSession<'static>>,
     mounts: mount::MountsInfo,
+    injector_config: Vec<InjectorConfig>,
 }
 
 impl MountInjector {
-    pub fn create_injection<P: AsRef<Path>>(path: P) -> Result<MountInjector> {
+    pub fn create_injection<P: AsRef<Path>>(path: P, injector_config: Vec<InjectorConfig>) -> Result<MountInjector> {
         let original_path: PathBuf = path.as_ref().to_owned();
 
         let mut base_path: PathBuf = path.as_ref().to_owned();
@@ -40,6 +43,7 @@ impl MountInjector {
             new_path,
             fuse_session: None,
             mounts: mount::MountsInfo::parse_mounts()?,
+            injector_config,
         });
     }
 
@@ -52,8 +56,10 @@ impl MountInjector {
             return Err(anyhow!("inject on a root mount"))
         }
 
+        let injectors = MultiInjector::build(self.injector_config.clone())?;
+
         let fs =
-            hookfs::AsyncFileSystem::from(hookfs::HookFs::new(&self.original_path, &self.new_path));
+            hookfs::AsyncFileSystem::from(hookfs::HookFs::new(&self.original_path, &self.new_path, injectors));
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 

@@ -9,14 +9,16 @@ mod mount;
 mod namespace;
 mod ptrace;
 mod fd_replacer;
+mod injector;
 
 use mount_injector::MountInjector;
 use fd_replacer::FdReplacer;
+use injector::InjectorConfig;
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
-use tracing::{info, Level};
+use tracing::{info, Level, trace};
 use tracing_subscriber;
 
 use std::path::PathBuf;
@@ -37,22 +39,24 @@ struct Options {
 
 fn main() -> Result<()> {
     let option = Options::from_args();
-
     let verbose = Level::from_str(&option.verbose)?;
-
     let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
+
+    trace!("parse injector configs");
+    let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
+    trace!("inject with config {:?}", injector_config);
 
     let path = option.path;
     let pid = option.pid;
 
     let mut fdreplacer = FdReplacer::new(&path, pid)?;
     fdreplacer.trace()?;
-
     let mut mount_injection = namespace::with_mnt_namespace(
         box move || -> Result<_> {
             let mut injection =MountInjector::create_injection(
                 path,
+                injector_config,
             )?;
 
             injection.mount()?;

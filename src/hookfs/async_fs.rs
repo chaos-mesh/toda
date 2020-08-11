@@ -153,6 +153,7 @@ impl<T: AsyncFileSystemImpl> From<T> for AsyncFileSystem<T> {
         let thread_pool = tokio::runtime::Builder::new()
             .threaded_scheduler()
             .thread_name("fuse-thread")
+            .enable_all()
             .build()
             .unwrap();
         Self { inner, thread_pool }

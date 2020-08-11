@@ -21,8 +21,12 @@ pub enum HookFsError {
     #[error("unknown file type")]
     UnknownFileType,
 
+    #[error("strip prefix error")]
+    StripPrefixError(#[from] std::path::StripPrefixError),
+
     #[error("unknown error")]
     UnknownError,
+    
 }
 
 pub type Result<T> = std::result::Result<T, HookFsError>;
@@ -70,8 +74,8 @@ impl Into<libc::c_int> for HookFsError {
             InodeNotFound { inode: _ } => libc::EFAULT,
             FhNotFound { fh: _ } => libc::EFAULT,
             UnknownFileType => libc::EINVAL,
-            UnknownError => libc::EFAULT,
             InvalidStr => libc::EINVAL,
+            _ => libc::EFAULT,
         }
     }
 }
