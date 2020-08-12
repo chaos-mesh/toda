@@ -26,7 +26,6 @@ pub enum HookFsError {
 
     #[error("unknown error")]
     UnknownError,
-    
 }
 
 pub type Result<T> = std::result::Result<T, HookFsError>;
@@ -46,7 +45,7 @@ impl From<nix::Error> for HookFsError {
             _ => {
                 error!("unknown error {:?}", err);
                 HookFsError::UnknownError
-            },
+            }
         }
     }
 }

@@ -1,16 +1,16 @@
-mod multi_injector;
-mod latency_injector;
-mod fault_injector;
 mod attr_override_injector;
+mod fault_injector;
 mod filter;
 mod injector_config;
+mod latency_injector;
+mod multi_injector;
 
+pub use filter::Method;
 pub use injector_config::InjectorConfig;
 pub use multi_injector::MultiInjector;
-pub use filter::Method;
 
+use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
-use crate::hookfs::{Result, Reply};
 
 use std::path::Path;
 
@@ -22,7 +22,9 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
 }
 
 default impl<T> Injector for T
-where T: Send + Sync + std::fmt::Debug {
+where
+    T: Send + Sync + std::fmt::Debug,
+{
     default fn inject_reply(&self, _: &filter::Method, _: &Path, _: &mut Reply) -> Result<()> {
         Ok(())
     }

@@ -115,7 +115,15 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 
     async fn access(&self, ino: u64, mask: u32) -> Result<()>;
 
-    async fn create(&self, parent: u64, name: OsString, mode: u32, flags: u32, uid: u32, gid: u32) -> Result<Create>;
+    async fn create(
+        &self,
+        parent: u64,
+        name: OsString,
+        mode: u32,
+        flags: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Create>;
 
     async fn getlk(
         &self,
@@ -311,9 +319,7 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let name = name.to_owned();
         let newname = newname.to_owned();
         self.spawn(reply, async move {
-            async_impl
-                .rename(parent, name, newparent, newname)
-                .await
+            async_impl.rename(parent, name, newparent, newname).await
         });
     }
     fn link(
@@ -418,9 +424,7 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn statfs(&mut self, _req: &Request, ino: u64, reply: ReplyStatfs) {
         let async_impl = self.inner.clone();
-        self.spawn(reply, async move {
-            async_impl.statfs(ino).await
-        });
+        self.spawn(reply, async move { async_impl.statfs(ino).await });
     }
     fn setxattr(
         &mut self,
@@ -449,15 +453,14 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.inner.clone();
         let name = name.to_owned();
-        self.spawn(reply, async move {
-            async_impl.getxattr(ino, name, size).await
-        });
+        self.spawn(
+            reply,
+            async move { async_impl.getxattr(ino, name, size).await },
+        );
     }
     fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
         let async_impl = self.inner.clone();
-        self.spawn(reply, async move {
-            async_impl.listxattr(ino, size).await
-        });
+        self.spawn(reply, async move { async_impl.listxattr(ino, size).await });
     }
     fn removexattr(&mut self, _req: &Request, ino: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
         let async_impl = self.inner.clone();

@@ -1,13 +1,13 @@
-use super::Injector;
 use super::filter;
+use super::Injector;
 
-use crate::hookfs::{Result, Reply};
 use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, FilterConfig};
+use crate::hookfs::{Reply, Result};
 
 use async_trait::async_trait;
-use tracing::trace;
+use fuse::{FileAttr, FileType};
 use time::Timespec;
-use fuse::{FileType, FileAttr};
+use tracing::trace;
 
 use std::path::Path;
 
@@ -78,7 +78,7 @@ impl Injector for AttrOverrideInjector {
     }
     fn inject_reply(&self, method: &filter::Method, path: &Path, reply: &mut Reply) -> Result<()> {
         if !self.filter.filter(method, path) {
-            return Ok(())
+            return Ok(());
         }
 
         match reply {
@@ -90,9 +90,7 @@ impl Injector for AttrOverrideInjector {
                 self.inject_attr(&mut attr.attr);
                 Ok(())
             }
-            _ => {
-                Ok(())
-            }
+            _ => Ok(()),
         }
     }
 }
@@ -116,35 +114,27 @@ impl AttrOverrideInjector {
             probability: conf.probability,
         })?;
 
-        let atime = conf.atime.map(|item| {
-            Timespec {
-                sec: item.sec,
-                nsec: item.nsec,
-            }
+        let atime = conf.atime.map(|item| Timespec {
+            sec: item.sec,
+            nsec: item.nsec,
         });
-        let mtime = conf.mtime.map(|item| {
-            Timespec {
-                sec: item.sec,
-                nsec: item.nsec,
-            }
+        let mtime = conf.mtime.map(|item| Timespec {
+            sec: item.sec,
+            nsec: item.nsec,
         });
-        let ctime = conf.ctime.map(|item| {
-            Timespec {
-                sec: item.sec,
-                nsec: item.nsec,
-            }
+        let ctime = conf.ctime.map(|item| Timespec {
+            sec: item.sec,
+            nsec: item.nsec,
         });
 
-        let kind = conf.kind.map(|item| {
-            match item {
-                ConfigFileType::Directory => FileType::Directory,
-                ConfigFileType::NamedPipe => FileType::NamedPipe,
-                ConfigFileType::RegularFile => FileType::RegularFile,
-                ConfigFileType::Socket => FileType::Socket,
-                ConfigFileType::Symlink => FileType::Symlink,
-                ConfigFileType::CharDevice => FileType::CharDevice,
-                ConfigFileType::BlockDevice => FileType::BlockDevice,
-            }
+        let kind = conf.kind.map(|item| match item {
+            ConfigFileType::Directory => FileType::Directory,
+            ConfigFileType::NamedPipe => FileType::NamedPipe,
+            ConfigFileType::RegularFile => FileType::RegularFile,
+            ConfigFileType::Socket => FileType::Socket,
+            ConfigFileType::Symlink => FileType::Symlink,
+            ConfigFileType::CharDevice => FileType::CharDevice,
+            ConfigFileType::BlockDevice => FileType::BlockDevice,
         });
 
         Ok(Self {

@@ -1,27 +1,26 @@
 #![allow(incomplete_features)]
-
 #![feature(box_syntax)]
 #![feature(async_closure)]
 #![feature(specialization)]
 
 extern crate derive_more;
 
+mod fd_replacer;
 mod hookfs;
-mod mount_injector;
+mod injector;
 mod mount;
+mod mount_injector;
 mod namespace;
 mod ptrace;
-mod fd_replacer;
-mod injector;
 
-use mount_injector::MountInjector;
 use fd_replacer::FdReplacer;
 use injector::InjectorConfig;
+use mount_injector::MountInjector;
 
 use anyhow::Result;
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
-use tracing::{info, Level, trace};
+use tracing::{info, trace, Level};
 use tracing_subscriber;
 
 use std::path::PathBuf;
@@ -57,13 +56,10 @@ fn main() -> Result<()> {
     fdreplacer.trace()?;
     let mut mount_injection = namespace::with_mnt_namespace(
         box move || -> Result<_> {
-            let mut injection =MountInjector::create_injection(
-                path,
-                injector_config,
-            )?;
+            let mut injection = MountInjector::create_injection(path, injector_config)?;
 
             injection.mount()?;
-            
+
             return Ok(injection);
         },
         option.pid,
@@ -95,7 +91,7 @@ fn main() -> Result<()> {
 
     fdreplacer.detach()?;
     info!("fdreplace detached");
-    
+
     info!("recover successfully");
     return Ok(());
 }

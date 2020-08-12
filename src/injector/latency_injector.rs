@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use std::path::Path;
 use std::time::Duration;
 
-use super::Injector;
 use super::filter;
 use super::injector_config::LatencyConfig;
+use super::Injector;
 use crate::hookfs::Result;
 
 use tokio::time::delay_for;
@@ -28,7 +28,7 @@ impl Injector for LatencyInjector {
             trace!("latency finished");
         }
 
-        return Ok(())
+        return Ok(());
     }
 }
 
@@ -39,7 +39,7 @@ impl LatencyInjector {
 
         Ok(Self {
             latency: conf.latency,
-            filter: filter::Filter::build(conf.filter)?
+            filter: filter::Filter::build(conf.filter)?,
         })
     }
 }

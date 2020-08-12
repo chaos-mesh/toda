@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ pub struct FaultsConfig {
     #[serde(flatten)]
     pub filter: FilterConfig,
 
-    pub faults: Vec<FaultConfig>
+    pub faults: Vec<FaultConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -78,4 +78,7 @@ pub enum FileType {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Timespec { pub sec: i64, pub nsec: i32 }
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: i32,
+}
