@@ -1,12 +1,12 @@
-use std::path::Path;
 use std::convert::TryFrom;
+use std::path::Path;
 
 use super::injector_config::FilterConfig;
 
+use anyhow::{anyhow, Error, Result};
 use bitflags::bitflags;
-use glob::{Pattern, MatchOptions};
+use glob::{MatchOptions, Pattern};
 use rand::Rng;
-use anyhow::{anyhow, Result, Error};
 
 use tracing::trace;
 
@@ -82,7 +82,7 @@ impl TryFrom<&str> for Method {
             "getlk" => Ok(Method::GETLK),
             "setlk" => Ok(Method::SETLK),
             "bmap" => Ok(Method::BMAP),
-            _ => Err(anyhow!(""))
+            _ => Err(anyhow!("")),
         }
     }
     type Error = Error;
@@ -118,11 +118,15 @@ impl Filter {
         trace!("path filter: {}", self.path_filter.matches_path(path));
         trace!("method filter: {}", (!(self.methods & *method).is_empty()));
         trace!("probability: {}", p < self.probability);
-        
-        return self.path_filter.matches_path_with(path, MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        }) && (!(self.methods & *method).is_empty()) && p < self.probability
+
+        return self.path_filter.matches_path_with(
+            path,
+            MatchOptions {
+                case_sensitive: true,
+                require_literal_separator: true,
+                require_literal_leading_dot: false,
+            },
+        ) && (!(self.methods & *method).is_empty())
+            && p < self.probability;
     }
 }

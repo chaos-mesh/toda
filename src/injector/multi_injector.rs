@@ -1,8 +1,8 @@
-use super::Injector;
+use super::fault_injector::FaultInjector;
 use super::filter;
 use super::injector_config::InjectorConfig;
-use super::fault_injector::FaultInjector;
 use super::latency_injector::LatencyInjector;
+use super::Injector;
 use crate::hookfs::Result;
 
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use std::path::Path;
 
 #[derive(Debug)]
 pub struct MultiInjector {
-    injectors: Vec<Box<dyn Injector>>
+    injectors: Vec<Box<dyn Injector>>,
 }
 
 impl MultiInjector {
@@ -23,15 +23,17 @@ impl MultiInjector {
 
         for injector in conf.into_iter() {
             let injector = match injector {
-                InjectorConfig::Faults(faults) => (box FaultInjector::build(faults)?) as Box<dyn Injector>,
-                InjectorConfig::Latency(latency) => (box LatencyInjector::build(latency)?) as Box<dyn Injector>,
+                InjectorConfig::Faults(faults) => {
+                    (box FaultInjector::build(faults)?) as Box<dyn Injector>
+                }
+                InjectorConfig::Latency(latency) => {
+                    (box LatencyInjector::build(latency)?) as Box<dyn Injector>
+                }
             };
             injectors.push(injector)
         }
 
-        return Ok(Self {
-            injectors,
-        })
+        return Ok(Self { injectors });
     }
 }
 
@@ -43,6 +45,6 @@ impl Injector for MultiInjector {
             injector.inject(method, path).await?
         }
 
-        return Ok(())
+        return Ok(());
     }
 }

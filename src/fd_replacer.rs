@@ -1,16 +1,16 @@
 use crate::ptrace;
 
-use std::path::{Path, PathBuf};
 use std::fmt::Debug;
 use std::fs::read_dir;
 use std::fs::read_link;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use nix::fcntl::FcntlArg;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 
-use tracing::{trace, info};
+use tracing::{info, trace};
 
 #[derive(PartialEq, Debug)]
 enum MountDirection {
@@ -68,9 +68,7 @@ impl FdReplacer {
 
         let process = match self.process.as_mut() {
             Some(process) => process,
-            None => {
-                return Err(anyhow!("reopen is called before trace"))
-            }
+            None => return Err(anyhow!("reopen is called before trace")),
         };
 
         let base_path = if self.direction == MountDirection::EnableChaos {
@@ -110,9 +108,7 @@ impl FdReplacer {
     pub fn detach(&mut self) -> Result<()> {
         let process = match self.process.take() {
             Some(process) => process,
-            None => {
-                return Err(anyhow!("reopen is called before trace"))
-            }
+            None => return Err(anyhow!("reopen is called before trace")),
         };
 
         for thread in process.threads() {
@@ -123,8 +119,12 @@ impl FdReplacer {
     }
 
     #[tracing::instrument(skip(self, thread, path))]
-    fn reopen_file<P: AsRef<Path>>(&self, thread: &ptrace::TracedThread, fd: u64, path: P) -> Result<()> {
-
+    fn reopen_file<P: AsRef<Path>>(
+        &self,
+        thread: &ptrace::TracedThread,
+        fd: u64,
+        path: P,
+    ) -> Result<()> {
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
         } else {
@@ -139,7 +139,13 @@ impl FdReplacer {
             self.new_path.join(striped_path)
         };
 
-        info!("reopen fd: {} for pid {}, from {} to {}", fd, thread.tid, path.as_ref().display(), original_path.display());
+        info!(
+            "reopen fd: {} for pid {}, from {} to {}",
+            fd,
+            thread.tid,
+            path.as_ref().display(),
+            original_path.display()
+        );
 
         let flags = thread.fcntl(fd, FcntlArg::F_GETFL)?;
 

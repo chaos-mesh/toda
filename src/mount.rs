@@ -34,7 +34,7 @@ impl MountsInfo {
 
         for mount_point in self.mounts.iter() {
             if mount_point.contains(path) {
-                // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still 
+                // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still
                 // use this method.
                 return Ok(true);
             }

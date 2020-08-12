@@ -1,8 +1,8 @@
-use super::Injector;
 use super::filter;
+use super::Injector;
 
-use crate::hookfs::{Error, Result};
 use super::injector_config::FaultsConfig;
+use crate::hookfs::{Error, Result};
 
 use async_trait::async_trait;
 use nix::errno::Errno;
@@ -36,12 +36,12 @@ impl Injector for FaultInjector {
 
                 if attempt < 0 {
                     trace!("return with error {}", err);
-                    return Err(Error::Sys(*err))
+                    return Err(Error::Sys(*err));
                 }
             }
         }
 
-        return Ok(())
+        return Ok(());
     }
 }
 
@@ -49,10 +49,12 @@ impl FaultInjector {
     #[tracing::instrument]
     pub fn build(conf: FaultsConfig) -> anyhow::Result<Self> {
         trace!("build fault injector");
-        
-        let errnos: Vec<_> = conf.faults.iter().map(|item| {
-            (Errno::from_i32(item.errno), item.weight)
-        }).collect();
+
+        let errnos: Vec<_> = conf
+            .faults
+            .iter()
+            .map(|item| (Errno::from_i32(item.errno), item.weight))
+            .collect();
 
         let sum = errnos.iter().fold(0, |acc, w| acc + w.1);
         Ok(Self {

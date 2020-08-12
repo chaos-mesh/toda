@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ pub struct LatencyConfig {
 #[serde(rename_all = "camelCase")]
 pub struct FaultsConfig {
     pub filter: FilterConfig,
-    pub faults: Vec<FaultConfig>
+    pub faults: Vec<FaultConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

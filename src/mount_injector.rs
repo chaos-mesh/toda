@@ -1,10 +1,10 @@
 use crate::hookfs;
+use crate::injector::MultiInjector;
 use crate::mount;
 use crate::InjectorConfig;
-use crate::injector::MultiInjector;
 
-use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
@@ -21,7 +21,10 @@ pub struct MountInjector {
 }
 
 impl MountInjector {
-    pub fn create_injection<P: AsRef<Path>>(path: P, injector_config: Vec<InjectorConfig>) -> Result<MountInjector> {
+    pub fn create_injection<P: AsRef<Path>>(
+        path: P,
+        injector_config: Vec<InjectorConfig>,
+    ) -> Result<MountInjector> {
         let original_path: PathBuf = path.as_ref().to_owned();
 
         let mut base_path: PathBuf = path.as_ref().to_owned();
@@ -53,18 +56,29 @@ impl MountInjector {
             self.mounts
                 .move_mount(&self.original_path, &self.new_path)?;
         } else {
-            return Err(anyhow!("inject on a root mount"))
+            return Err(anyhow!("inject on a root mount"));
         }
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 
-        let fs =
-            hookfs::AsyncFileSystem::from(hookfs::HookFs::new(&self.original_path, &self.new_path, injectors));
+        let fs = hookfs::AsyncFileSystem::from(hookfs::HookFs::new(
+            &self.original_path,
+            &self.new_path,
+            injectors,
+        ));
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 
-            let args = ["allow_other", "nonempty", "fsname=toda", "default_permissions"];
-            let flags: Vec<_> = args.iter().flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)]).collect();
+            let args = [
+                "allow_other",
+                "nonempty",
+                "fsname=toda",
+                "default_permissions",
+            ];
+            let flags: Vec<_> = args
+                .iter()
+                .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
+                .collect();
 
             trace!("mount with flags {:?}", flags);
             fuse::spawn_mount(fs, &self.original_path, &flags)?
@@ -90,7 +104,7 @@ impl MountInjector {
             self.mounts
                 .move_mount(&self.new_path, &self.original_path)?;
         } else {
-            return Err(anyhow!("inject on a root mount"))
+            return Err(anyhow!("inject on a root mount"));
         }
 
         return Ok(());

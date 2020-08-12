@@ -1,6 +1,6 @@
 use fuse::*;
 use time::{get_time, Timespec};
-use tracing::{debug, trace, error};
+use tracing::{debug, error, trace};
 
 use super::errors::Result;
 
@@ -59,19 +59,35 @@ impl Data {
 
 #[derive(Debug)]
 pub struct StatFs {
-    pub blocks: u64, 
-    pub bfree: u64, 
-    pub bavail: u64, 
-    pub files: u64, 
-    pub ffree: u64, 
-    pub bsize: u32, 
-    pub namelen: u32, 
-    pub frsize: u32
+    pub blocks: u64,
+    pub bfree: u64,
+    pub bavail: u64,
+    pub files: u64,
+    pub ffree: u64,
+    pub bsize: u32,
+    pub namelen: u32,
+    pub frsize: u32,
 }
 impl StatFs {
-    pub fn new(blocks: u64, bfree: u64, bavail: u64, files: u64, ffree: u64, bsize: u32, namelen: u32, frsize: u32) -> Self {
+    pub fn new(
+        blocks: u64,
+        bfree: u64,
+        bavail: u64,
+        files: u64,
+        ffree: u64,
+        bsize: u32,
+        namelen: u32,
+        frsize: u32,
+    ) -> Self {
         Self {
-            blocks, bfree, bavail, files, ffree, bsize, namelen, frsize
+            blocks,
+            bfree,
+            bavail,
+            files,
+            ffree,
+            bsize,
+            namelen,
+            frsize,
         }
     }
 }
@@ -82,55 +98,62 @@ pub struct Write {
 }
 impl Write {
     pub fn new(size: u32) -> Self {
-        Self {
-            size,
-        }
+        Self { size }
     }
 }
 
 #[derive(Debug)]
 pub struct Create {
-    pub ttl: Timespec, 
-    pub attr: FileAttr, 
-    pub generation: u64, 
-    pub fh: u64, 
-    pub flags: u32
+    pub ttl: Timespec,
+    pub attr: FileAttr,
+    pub generation: u64,
+    pub fh: u64,
+    pub flags: u32,
 }
 impl Create {
-    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: u32) -> Self { Self { ttl: get_time(), attr, generation, fh, flags } }
-
+    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: u32) -> Self {
+        Self {
+            ttl: get_time(),
+            attr,
+            generation,
+            fh,
+            flags,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct Lock {
-    pub start: u64, 
-    pub end: u64, 
-    pub typ: u32, 
-    pub pid: u32
+    pub start: u64,
+    pub end: u64,
+    pub typ: u32,
+    pub pid: u32,
 }
 
 impl Lock {
-    pub fn _new(start: u64, end: u64, typ: u32, pid: u32) -> Self { Self { start, end, typ, pid } }
+    pub fn _new(start: u64, end: u64, typ: u32, pid: u32) -> Self {
+        Self {
+            start,
+            end,
+            typ,
+            pid,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum Xattr {
-    Data {
-        data: Vec<u8>,
-    },
-    Size {
-        size: u32,
-    }
+    Data { data: Vec<u8> },
+    Size { size: u32 },
 }
 impl Xattr {
     pub fn data(data: Vec<u8>) -> Self {
-        Xattr::Data {data}
+        Xattr::Data { data }
     }
     pub fn size(size: u32) -> Self {
-        Xattr::Size {size}
+        Xattr::Size { size }
     }
 }
-
 
 pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
@@ -194,7 +217,16 @@ impl FsReply<Data> for ReplyData {
 
 impl FsReply<StatFs> for ReplyStatfs {
     fn reply_ok(self, item: StatFs) {
-        self.statfs(item.blocks, item.bfree, item.bavail, item.files, item.ffree, item.bsize, item.namelen, item.frsize)
+        self.statfs(
+            item.blocks,
+            item.bfree,
+            item.bavail,
+            item.files,
+            item.ffree,
+            item.bsize,
+            item.namelen,
+            item.frsize,
+        )
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);
@@ -232,8 +264,8 @@ impl FsReply<Xattr> for ReplyXattr {
     fn reply_ok(self, item: Xattr) {
         use Xattr::*;
         match item {
-            Data {data} => self.data(data.as_slice()),
-            Size {size} => self.size(size),
+            Data { data } => self.data(data.as_slice()),
+            Size { size } => self.size(size),
         }
     }
     fn reply_err(self, err: libc::c_int) {

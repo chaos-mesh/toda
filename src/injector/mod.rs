@@ -1,15 +1,15 @@
-mod multi_injector;
-mod latency_injector;
 mod fault_injector;
 mod filter;
 mod injector_config;
+mod latency_injector;
+mod multi_injector;
 
+pub use filter::Method;
 pub use injector_config::InjectorConfig;
 pub use multi_injector::MultiInjector;
-pub use filter::Method;
 
-use async_trait::async_trait;
 use crate::hookfs::Result;
+use async_trait::async_trait;
 
 use std::path::Path;
 
