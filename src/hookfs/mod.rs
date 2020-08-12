@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
+pub use reply::Reply;
 use reply::*;
 
 use tokio::sync::RwLock;
@@ -50,6 +51,16 @@ macro_rules! inject {
             .injector
             .inject(&Method::$method, $self.rebuild_path($path)?.as_path())
             .await?;
+    };
+}
+
+macro_rules! inject_reply {
+    ($self:ident, $method:ident, $path:expr, $reply:ident, $reply_typ:ident) => {
+        $self.injector.inject_reply(
+            &Method::$method,
+            $self.rebuild_path($path)?.as_path(),
+            &mut Reply::$reply_typ(&mut $reply),
+        )?;
     };
 }
 
@@ -241,12 +252,19 @@ impl AsyncFileSystemImpl for HookFs {
         let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
         trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
-        self.inode_map.write().await.entry(stat.ino).or_insert(path);
+        self.inode_map
+            .write()
+            .await
+            .entry(stat.ino)
+            .or_insert(path.clone());
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with {:?}", stat);
 
-        return Ok(Entry::new(stat, 0));
+        let mut reply = Entry::new(stat, 0);
+        inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
+
+        return Ok(reply);
     }
 
     #[tracing::instrument]
@@ -268,9 +286,12 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
+        let mut reply = Attr::new(stat);
+        inject_reply!(self, GETATTR, path, reply, Attr);
+
         trace!("return with {:?}", stat);
 
-        Ok(Attr::new(stat))
+        Ok(reply)
     }
 
     #[tracing::instrument]
@@ -327,17 +348,20 @@ impl AsyncFileSystemImpl for HookFs {
     async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
         let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, READLINK, path);
+        let link_path = inode_map.get_path(ino)?;
+        inject!(self, READLINK, link_path);
 
-        let path = readlink(path)?;
+        let path = readlink(link_path)?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
         let data = path.as_bytes_with_nul();
         trace!("reply with data: {:?}", data);
 
-        Ok(Data::new(path.into_bytes()))
+        let mut reply = Data::new(path.into_bytes());
+        inject_reply!(self, READLINK, link_path, reply, Data);
+
+        Ok(reply)
     }
 
     #[tracing::instrument]
@@ -520,8 +544,10 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 
+        let mut reply = Open::new(fh, 0);
+        inject_reply!(self, OPEN, path, reply, Open);
         // TODO: force DIRECT_IO is not a great option
-        Ok(Open::new(fh, 0))
+        Ok(reply)
     }
     #[tracing::instrument]
     async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
@@ -552,7 +578,9 @@ impl AsyncFileSystemImpl for HookFs {
             }
         }
 
-        Ok(Data::new(buf))
+        let mut reply = Data::new(buf);
+        inject_reply!(self, READ, path, reply, Data);
+        Ok(reply)
     }
     #[tracing::instrument(skip(data))]
     async fn write(
@@ -576,7 +604,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         file.write_all(&data).await?;
 
-        Ok(Write::new(data.len() as u32))
+        let mut reply = Write::new(data.len() as u32);
+        inject_reply!(self, WRITE, path, reply, Write);
+        Ok(reply)
     }
     #[tracing::instrument]
     async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()> {
@@ -642,7 +672,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("return with fh: {}, flags: {}", fh, flags);
 
-        Ok(Open::new(fh, flags))
+        let mut reply = Open::new(fh, flags);
+        inject_reply!(self, OPENDIR, path, reply, Open);
+        Ok(reply)
     }
 
     #[tracing::instrument]
@@ -775,7 +807,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = statfs::statfs(self.original_path.as_path())?;
 
-        Ok(StatFs::new(
+        let mut reply = StatFs::new(
             stat.blocks(),
             stat.blocks_free(),
             stat.blocks_available(),
@@ -784,7 +816,10 @@ impl AsyncFileSystemImpl for HookFs {
             stat.block_size() as u32,
             stat.maximum_name_length() as u32,
             stat.block_size() as u32,
-        ))
+        );
+        inject_reply!(self, STATFS, path, reply, StatFs);
+
+        Ok(reply)
     }
     #[tracing::instrument]
     async fn setxattr(
@@ -823,8 +858,8 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?;
         inject!(self, GETXATTR, path);
 
-        let path = CString::new(path.as_os_str().as_bytes())?;
-        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+        let cpath = CString::new(path.as_os_str().as_bytes())?;
+        let path_ptr = &cpath.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let name = CString::new(name.as_bytes())?;
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
@@ -839,13 +874,16 @@ impl AsyncFileSystemImpl for HookFs {
             return Err(Error::last());
         }
 
-        if size == 0 {
+        let mut reply = if size == 0 {
             trace!("return with size {}", ret);
-            Ok(Xattr::size(ret as u32))
+            Xattr::size(ret as u32)
         } else {
             trace!("return with data {:?}", buf);
-            Ok(Xattr::data(buf))
-        }
+            Xattr::data(buf)
+        };
+        inject_reply!(self, GETXATTR, path, reply, Xattr);
+
+        return Ok(reply);
     }
     #[tracing::instrument]
     async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
@@ -854,8 +892,8 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?;
         inject!(self, LISTXATTR, path);
 
-        let path = CString::new(path.as_os_str().as_bytes())?;
-        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
+        let cpath = CString::new(path.as_os_str().as_bytes())?;
+        let path_ptr = &cpath.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
 
         let mut buf = Vec::new();
         buf.resize(size as usize, 0u8);
@@ -867,11 +905,14 @@ impl AsyncFileSystemImpl for HookFs {
             return Err(Error::last());
         }
 
-        if size == 0 {
-            Ok(Xattr::size(ret as u32))
+        let mut reply = if size == 0 {
+            Xattr::size(ret as u32)
         } else {
-            Ok(Xattr::data(buf))
-        }
+            Xattr::data(buf)
+        };
+        inject_reply!(self, LISTXATTR, path, reply, Xattr);
+
+        return Ok(reply);
     }
     #[tracing::instrument]
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()> {
@@ -938,7 +979,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = convert_libc_stat_to_fuse_stat(stat)?;
 
-        self.inode_map.write().await.insert(stat.ino, path);
+        self.inode_map.write().await.insert(stat.ino, path.clone());
 
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);
@@ -948,7 +989,9 @@ impl AsyncFileSystemImpl for HookFs {
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
 
-        Ok(Create::new(stat, 0, fh as u64, flags))
+        let mut reply = Create::new(stat, 0, fh as u64, flags);
+        inject_reply!(self, CREATE, path.as_path(), reply, Create);
+        Ok(reply)
     }
     #[tracing::instrument]
     async fn getlk(
