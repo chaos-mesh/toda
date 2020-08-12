@@ -7,6 +7,19 @@ use super::errors::Result;
 use std::fmt::Debug;
 
 #[derive(Debug)]
+pub enum Reply<'a> {
+    Entry(&'a mut Entry),
+    Open(&'a mut Open),
+    Attr(&'a mut Attr),
+    Data(&'a mut Data),
+    StatFs(&'a mut StatFs),
+    Write(&'a mut Write),
+    Create(&'a mut Create),
+    _Lock(&'a mut Lock),
+    Xattr(&'a mut Xattr),
+}
+
+#[derive(Debug)]
 pub struct Entry {
     pub time: Timespec,
     pub stat: FileAttr,

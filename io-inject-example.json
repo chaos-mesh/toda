@@ -1,37 +1,31 @@
 [
     {
         "type": "latency",
-        "filter": {
-            "path": "/mnt/test/*",
-            "methods": [
-                "read",
-                "write"
-            ],
-            "probability": 0.8
-        },
-        "latency": "1s"
+        "path": "/mnt/test/*",
+        "methods": [
+            "read",
+            "write"
+        ],
+        "probability": 0.8,
+        "latency": "5s"
     },
     {
         "type": "latency",
-        "filter": {
-            "path": "/mnt/test/latency/*",
-            "methods": [
-                "getattr"
-            ],
-            "probability": 0.5
-        },
+        "path": "/mnt/test/latency/*",
+        "methods": [
+            "getattr"
+        ],
+        "probability": 0.5,
         "latency": "5s"
     },
     {
         "type": "faults",
-        "filter": {
-            "path": "/mnt/test/*",
-            "methods": [
-                "read",
-                "write"
-            ],
-            "probability": 0.8
-        },
+        "path": "/mnt/test/*",
+        "methods": [
+            "read",
+            "write"
+        ],
+        "probability": 0.8,
         "faults": [
             {
                 "errno": 1,
@@ -42,5 +36,14 @@
                 "weight": 1
             }
         ]
+    },
+    {
+        "type": "attrOverride",
+        "path": "/mnt/test/attr/*",
+        "probability": 1,
+        "mtime": {
+            "sec": 0,
+            "nsec": 0
+        }
     }
 ]

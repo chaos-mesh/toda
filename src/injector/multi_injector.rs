@@ -3,7 +3,8 @@ use super::filter;
 use super::injector_config::InjectorConfig;
 use super::fault_injector::FaultInjector;
 use super::latency_injector::LatencyInjector;
-use crate::hookfs::Result;
+use super::attr_override_injector::AttrOverrideInjector;
+use crate::hookfs::{Result, Reply};
 
 use async_trait::async_trait;
 use tracing::trace;
@@ -25,6 +26,7 @@ impl MultiInjector {
             let injector = match injector {
                 InjectorConfig::Faults(faults) => (box FaultInjector::build(faults)?) as Box<dyn Injector>,
                 InjectorConfig::Latency(latency) => (box LatencyInjector::build(latency)?) as Box<dyn Injector>,
+                InjectorConfig::AttrOverride(attr_override) => (box AttrOverrideInjector::build(attr_override)? ) as Box<dyn Injector>,
             };
             injectors.push(injector)
         }
@@ -41,6 +43,14 @@ impl Injector for MultiInjector {
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         for injector in self.injectors.iter() {
             injector.inject(method, path).await?
+        }
+
+        return Ok(())
+    }
+
+    fn inject_reply(&self, method: &filter::Method, path: &Path, reply: &mut Reply) -> Result<()> {
+        for injector in self.injectors.iter() {
+            injector.inject_reply(method, path, reply)?
         }
 
         return Ok(())
