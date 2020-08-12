@@ -7,13 +7,14 @@ use super::reply::*;
 
 use std::ffi::OsString;
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::{
     future::Future,
     path::{Path, PathBuf},
 };
 
 #[async_trait]
-pub trait AsyncFileSystemImpl: Clone + Send + Sync {
+pub trait AsyncFileSystemImpl: Send + Sync {
     fn init(&self) -> Result<()>;
 
     fn destroy(&self);
@@ -152,7 +153,7 @@ pub trait AsyncFileSystemImpl: Clone + Send + Sync {
 }
 
 pub struct AsyncFileSystem<T: AsyncFileSystemImpl> {
-    inner: T,
+    inner: Arc<T>,
     thread_pool: tokio::runtime::Runtime,
 }
 
@@ -164,7 +165,10 @@ impl<T: AsyncFileSystemImpl> From<T> for AsyncFileSystem<T> {
             .enable_all()
             .build()
             .unwrap();
-        Self { inner, thread_pool }
+        Self {
+            inner: Arc::new(inner),
+            thread_pool,
+        }
     }
 }
 

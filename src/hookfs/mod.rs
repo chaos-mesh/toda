@@ -35,7 +35,6 @@ use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
@@ -99,19 +98,19 @@ impl<T> CounterMap<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct HookFs {
-    mount_path: Arc<PathBuf>,
-    original_path: Arc<PathBuf>,
+    mount_path: PathBuf,
+    original_path: PathBuf,
 
-    opened_files: Arc<RwLock<FhMap<File>>>,
+    opened_files: RwLock<FhMap<File>>,
 
-    opened_dirs: Arc<RwLock<FhMap<Dir>>>,
+    opened_dirs: RwLock<FhMap<Dir>>,
 
-    injector: Arc<MultiInjector>,
+    injector: MultiInjector,
 
     // map from inode to real path
-    inode_map: Arc<RwLock<InodeMap>>,
+    inode_map: RwLock<InodeMap>,
 }
 
 #[derive(Debug, Deref, DerefMut, From)]
@@ -158,14 +157,14 @@ impl HookFs {
         let mut inode_map = InodeMap::from(HashMap::new());
         inode_map.insert(1, original_path.as_ref().to_owned());
 
-        let inode_map = Arc::new(RwLock::new(inode_map));
+        let inode_map = RwLock::new(inode_map);
 
         HookFs {
-            mount_path: Arc::new(mount_path.as_ref().to_owned()),
-            original_path: Arc::new(original_path.as_ref().to_owned()),
-            opened_files: Arc::new(RwLock::new(FhMap::from(CounterMap::new()))),
-            opened_dirs: Arc::new(RwLock::new(FhMap::from(CounterMap::new()))),
-            injector: Arc::new(injector),
+            mount_path: mount_path.as_ref().to_owned(),
+            original_path: original_path.as_ref().to_owned(),
+            opened_files: RwLock::new(FhMap::from(CounterMap::new())),
+            opened_dirs: RwLock::new(FhMap::from(CounterMap::new())),
+            injector: injector,
             inode_map,
         }
     }
