@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Install FUSE
-      run: sudo apt install fuse -y
+      run: sudo apt install fuse libfuse-dev pkg-config -y
     - name: Build
       run: cargo build --verbose
     - name: Run tests
