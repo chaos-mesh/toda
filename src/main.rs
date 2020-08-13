@@ -54,10 +54,11 @@ fn main() -> Result<()> {
 
     let mut fdreplacer = FdReplacer::new(&path, pid)?;
     fdreplacer.trace()?;
+
+    let mut injection = MountInjector::create_injection(path, pid, injector_config)?;
+
     let mut mount_injection = namespace::with_mnt_namespace(
         box move || -> Result<_> {
-            let mut injection = MountInjector::create_injection(path, injector_config)?;
-
             injection.mount()?;
 
             return Ok(injection);
