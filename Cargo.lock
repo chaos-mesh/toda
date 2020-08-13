@@ -764,6 +764,7 @@ dependencies = [
  "humantime-serde",
  "libc",
  "nix",
+ "once_cell",
  "rand",
  "serde",
  "serde_json",

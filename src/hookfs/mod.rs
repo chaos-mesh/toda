@@ -1,6 +1,7 @@
 mod async_fs;
 mod errors;
 mod reply;
+mod runtime;
 
 use crate::injector::Injector;
 use crate::injector::Method;
@@ -41,6 +42,7 @@ pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
 pub use reply::Reply;
 use reply::*;
+use runtime::spawn_blocking;
 
 use tokio::sync::RwLock;
 
@@ -214,9 +216,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         inject!(self, LOOKUP, path.as_path());
 
-        let stat = stat::lstat(&path)?;
-
-        let stat = convert_libc_stat_to_fuse_stat(stat)?;
+        let stat = async_stat(&path)
+            .await
+            .map(convert_libc_stat_to_fuse_stat)??;
 
         trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
         self.inode_map
@@ -249,9 +251,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("getting attr from path {}", path.display());
         inject!(self, GETATTR, path);
 
-        let stat = stat::lstat(path)?;
-
-        let stat = convert_libc_stat_to_fuse_stat(stat)?;
+        let stat = async_stat(&path)
+            .await
+            .map(convert_libc_stat_to_fuse_stat)??;
 
         let mut reply = Attr::new(stat);
         inject_reply!(self, GETATTR, path, reply, Attr);
@@ -283,18 +285,10 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?;
         inject!(self, SETATTR, path);
 
-        chown(
-            path,
-            uid.map(|uid| Uid::from_raw(uid)),
-            gid.map(|gid| Gid::from_raw(gid)),
-        )?;
+        async_chown(path, uid, gid).await?;
+
         if let Some(mode) = mode {
-            stat::fchmodat(
-                None,
-                path,
-                stat::Mode::from_bits_truncate(mode),
-                stat::FchmodatFlags::FollowSymlink,
-            )?;
+            async_fchmodat(path, mode).await?;
         }
 
         if let Some(size) = size {
@@ -995,4 +989,36 @@ impl AsyncFileSystemImpl for HookFs {
         error!("unimplemented");
         reply.error(nix::libc::ENOSYS);
     }
+}
+
+async fn async_stat(path: &Path) -> Result<stat::FileStat> {
+    let path_clone = path.to_path_buf();
+    Ok(spawn_blocking(move || stat::lstat(&path_clone)).await??)
+}
+
+async fn async_chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+    let path_clone = path.to_path_buf();
+    spawn_blocking(move || {
+        chown(
+            &path_clone,
+            uid.map(|uid| Uid::from_raw(uid)),
+            gid.map(|gid| Gid::from_raw(gid)),
+        )
+    })
+    .await??;
+    Ok(())
+}
+
+async fn async_fchmodat(path: &Path, mode: u32) -> Result<()> {
+    let path_clone = path.to_path_buf();
+    spawn_blocking(move || {
+        stat::fchmodat(
+            None,
+            &path_clone,
+            stat::Mode::from_bits_truncate(mode),
+            stat::FchmodatFlags::FollowSymlink,
+        )
+    })
+    .await??;
+    Ok(())
 }

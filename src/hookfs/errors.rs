@@ -64,6 +64,14 @@ impl From<std::io::Error> for HookFsError {
     }
 }
 
+impl From<tokio::task::JoinError> for HookFsError {
+    #[tracing::instrument]
+    fn from(err: tokio::task::JoinError) -> HookFsError {
+        error!("unknown error {:?}", err);
+        HookFsError::UnknownError
+    }
+}
+
 impl Into<libc::c_int> for HookFsError {
     fn into(self) -> libc::c_int {
         use HookFsError::*;
