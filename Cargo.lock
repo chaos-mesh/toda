@@ -768,6 +768,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "slab",
  "structopt",
  "thiserror",
  "time",

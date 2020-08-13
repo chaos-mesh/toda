@@ -9,6 +9,7 @@ use crate::injector::MultiInjector;
 use async_trait::async_trait;
 use derive_more::{Deref, DerefMut, From};
 use fuse::*;
+use slab::Slab;
 use time::Timespec;
 
 use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
@@ -65,40 +66,6 @@ macro_rules! inject_reply {
 }
 
 #[derive(Debug)]
-struct CounterMap<T> {
-    map: HashMap<usize, T>,
-    counter: usize,
-}
-
-impl<T> CounterMap<T> {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            counter: 0,
-        }
-    }
-
-    pub fn insert(&mut self, item: T) -> usize {
-        self.map.insert(self.counter, item);
-        self.counter += 1;
-
-        self.counter - 1
-    }
-
-    pub fn get(&self, key: usize) -> Option<&T> {
-        self.map.get(&key)
-    }
-
-    pub fn get_mut(&mut self, key: usize) -> Option<&mut T> {
-        self.map.get_mut(&key)
-    }
-
-    pub fn delete(&mut self, key: usize) -> Option<T> {
-        self.map.remove(&key)
-    }
-}
-
-#[derive(Debug)]
 pub struct HookFs {
     mount_path: PathBuf,
     original_path: PathBuf,
@@ -126,7 +93,7 @@ impl InodeMap {
 }
 
 #[derive(Debug, Deref, DerefMut, From)]
-struct FhMap<T>(CounterMap<T>);
+struct FhMap<T>(Slab<T>);
 
 impl<T> FhMap<T> {
     fn get(&self, key: usize) -> Result<&T> {
@@ -162,8 +129,8 @@ impl HookFs {
         HookFs {
             mount_path: mount_path.as_ref().to_owned(),
             original_path: original_path.as_ref().to_owned(),
-            opened_files: RwLock::new(FhMap::from(CounterMap::new())),
-            opened_dirs: RwLock::new(FhMap::from(CounterMap::new())),
+            opened_files: RwLock::new(FhMap::from(Slab::new())),
+            opened_dirs: RwLock::new(FhMap::from(Slab::new())),
             injector: injector,
             inode_map,
         }
@@ -639,7 +606,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         // FIXME: implement release
         let mut opened_files = self.opened_files.write().await;
-        opened_files.delete(fh as usize);
+        opened_files.remove(fh as usize);
         Ok(())
     }
     #[tracing::instrument]
