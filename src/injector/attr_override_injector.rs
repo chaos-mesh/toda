@@ -111,7 +111,7 @@ impl AttrOverrideInjector {
         let filter = filter::Filter::build(FilterConfig {
             path: conf.path,
             methods,
-            probability: conf.probability,
+            percent: conf.percent,
         })?;
 
         let atime = conf.atime.map(|item| Timespec {

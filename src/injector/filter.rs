@@ -107,7 +107,7 @@ impl Filter {
         Ok(Self {
             path_filter: Pattern::new(&conf.path)?,
             methods,
-            probability: conf.probability,
+            probability: conf.percent as f64 / 100f64,
         })
     }
     #[tracing::instrument]

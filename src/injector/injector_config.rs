@@ -34,7 +34,7 @@ pub struct FaultsConfig {
 pub struct FilterConfig {
     pub path: String,
     pub methods: Vec<String>,
-    pub probability: f64,
+    pub percent: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -48,7 +48,7 @@ pub struct FaultConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AttrOverrideConfig {
     pub path: String,
-    pub probability: f64,
+    pub percent: i32,
 
     pub ino: Option<u64>,
     pub size: Option<u64>,

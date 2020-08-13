@@ -6,7 +6,7 @@
             "read",
             "write"
         ],
-        "probability": 0.8,
+        "percent": 80,
         "latency": "5s"
     },
     {
@@ -15,7 +15,7 @@
         "methods": [
             "getattr"
         ],
-        "probability": 0.5,
+        "percent": 50,
         "latency": "5s"
     },
     {
@@ -25,7 +25,7 @@
             "read",
             "write"
         ],
-        "probability": 0.8,
+        "percent": 80,
         "faults": [
             {
                 "errno": 1,
@@ -40,7 +40,7 @@
     {
         "type": "attrOverride",
         "path": "/mnt/test/attr/*",
-        "probability": 1,
+        "percent": 100,
         "mtime": {
             "sec": 0,
             "nsec": 0
