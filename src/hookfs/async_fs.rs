@@ -152,7 +152,7 @@ pub trait AsyncFileSystemImpl: Send + Sync {
     async fn bmap(&self, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap);
 }
 
-pub struct AsyncFileSystem<T: AsyncFileSystemImpl> {
+pub struct AsyncFileSystem<T> {
     inner: Arc<T>,
     thread_pool: tokio::runtime::Runtime,
 }
@@ -172,13 +172,13 @@ impl<T: AsyncFileSystemImpl> From<T> for AsyncFileSystem<T> {
     }
 }
 
-impl<T: AsyncFileSystemImpl + Debug> Debug for AsyncFileSystem<T> {
+impl<T: Debug> Debug for AsyncFileSystem<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl<T: AsyncFileSystemImpl> AsyncFileSystem<T> {
+impl<T> AsyncFileSystem<T> {
     pub fn spawn<
         F: Future<Output = Result<V>> + Send + 'static,
         R: FsReply<V> + Send + 'static,
