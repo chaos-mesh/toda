@@ -16,7 +16,7 @@ pub fn enter_mnt_pid_namespace(pid: i32) -> Result<()> {
     let pid_ns = open(pid_ns_path.as_str(), OFlag::O_RDONLY, stat::Mode::all())?;
 
     setns(mnt_ns, CloneFlags::CLONE_NEWNS)?;
-    setns(pid_ns, CloneFlags::CLONE_NEWNS)?;
+    setns(pid_ns, CloneFlags::CLONE_NEWPID)?;
 
     Ok(())
 }
