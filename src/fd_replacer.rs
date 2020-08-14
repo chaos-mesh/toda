@@ -13,7 +13,7 @@ use nix::sys::stat::Mode;
 use tracing::{info, trace};
 
 #[derive(PartialEq, Debug)]
-enum MountDirection {
+pub enum MountDirection {
     EnableChaos,
     DisableChaos,
 }
@@ -28,7 +28,11 @@ pub struct FdReplacer {
 
 impl FdReplacer {
     #[tracing::instrument()]
-    pub fn new<P: AsRef<Path> + Debug>(path: P, pid: i32) -> Result<FdReplacer> {
+    pub fn new<P: AsRef<Path> + Debug>(
+        path: P,
+        pid: i32,
+        direction: MountDirection,
+    ) -> Result<FdReplacer> {
         let original_path: PathBuf = path.as_ref().to_owned();
 
         let mut base_path: PathBuf = path.as_ref().to_owned();
@@ -49,13 +53,23 @@ impl FdReplacer {
             pid,
             original_path,
             new_path,
-            direction: MountDirection::EnableChaos,
+            direction,
             process: ptrace::TracedProcess::trace(pid)?,
         });
     }
 
+    #[tracing::instrument()]
+    pub fn enable<P: AsRef<Path> + Debug>(path: P, pid: i32) -> Result<FdReplacer> {
+        Self::new(path, pid, MountDirection::EnableChaos)
+    }
+
+    #[tracing::instrument()]
+    pub fn disable<P: AsRef<Path> + Debug>(path: P, pid: i32) -> Result<FdReplacer> {
+        Self::new(path, pid, MountDirection::DisableChaos)
+    }
+
     #[tracing::instrument(skip(self))]
-    pub fn reopen(&mut self) -> Result<()> {
+    pub fn reopen(&self) -> Result<()> {
         trace!("reopen fd for pid: {}", self.pid);
 
         let base_path = if self.direction == MountDirection::EnableChaos {
@@ -85,11 +99,6 @@ impl FdReplacer {
             }
         }
 
-        if self.direction == MountDirection::EnableChaos {
-            self.direction = MountDirection::DisableChaos
-        } else {
-            self.direction = MountDirection::EnableChaos
-        }
         return Ok(());
     }
 

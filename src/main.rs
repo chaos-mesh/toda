@@ -4,24 +4,24 @@
 extern crate derive_more;
 
 mod fd_replacer;
+mod fuse_device;
 mod hookfs;
 mod injector;
 mod mount;
 mod mount_injector;
 mod namespace;
 mod ptrace;
-mod fuse_device;
 
 use fd_replacer::FdReplacer;
 use injector::InjectorConfig;
 use mount_injector::MountInjector;
 
 use anyhow::Result;
+use nix::sys::signal::{signal, SigHandler, Signal};
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 use tracing::{info, trace, Level};
 use tracing_subscriber;
-use nix::sys::signal::{signal, Signal, SigHandler};
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -41,7 +41,7 @@ struct Options {
 
 fn main() -> Result<()> {
     // ignore dying children
-    unsafe {signal(Signal::SIGCHLD, SigHandler::SigIgn)?};
+    unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
 
     let option = Options::from_args();
     let verbose = Level::from_str(&option.verbose)?;
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
     let path = option.path;
     let pid = option.pid;
 
-    let mut fdreplacer = FdReplacer::new(&path, pid)?;
+    let mut fdreplacer = FdReplacer::enable(&path, pid)?;
 
     let mut injection = MountInjector::create_injection(&path, pid, injector_config)?;
 
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     signals.forever().next();
     info!("start to recover and exit");
 
-    fdreplacer = FdReplacer::new(&path, pid)?;
+    fdreplacer = FdReplacer::disable(&path, pid)?;
     fdreplacer.reopen()?;
 
     info!("fdreplace reopened");
