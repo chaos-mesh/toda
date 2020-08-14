@@ -82,6 +82,7 @@ impl MountInjector {
                 .collect();
 
             trace!("mount with flags {:?}", flags);
+
             fuse::spawn_mount(fs, &self.original_path, &flags)?
         };
         trace!("wait 1 second");
