@@ -1,7 +1,5 @@
-#![allow(incomplete_features)]
 #![feature(box_syntax)]
 #![feature(async_closure)]
-#![feature(specialization)]
 
 extern crate derive_more;
 
