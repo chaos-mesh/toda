@@ -12,6 +12,7 @@ mod mount;
 mod mount_injector;
 mod namespace;
 mod ptrace;
+mod fuse_device;
 
 use fd_replacer::FdReplacer;
 use injector::InjectorConfig;
@@ -22,6 +23,7 @@ use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 use tracing::{info, trace, Level};
 use tracing_subscriber;
+use nix::sys::signal::{signal, Signal, SigHandler};
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -40,6 +42,9 @@ struct Options {
 }
 
 fn main() -> Result<()> {
+    // ignore dying children
+    unsafe {signal(Signal::SIGCHLD, SigHandler::SigIgn)?};
+
     let option = Options::from_args();
     let verbose = Level::from_str(&option.verbose)?;
     let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
@@ -57,8 +62,14 @@ fn main() -> Result<()> {
 
     let mut injection = MountInjector::create_injection(path, pid, injector_config)?;
 
+    let fuse_dev = fuse_device::read_fuse_dev_t()?;
+
     let mut mount_injection = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
+            if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
+                info!("fail to make /dev/fuse node: {}", err)
+            }
+
             injection.mount()?;
 
             return Ok(injection);

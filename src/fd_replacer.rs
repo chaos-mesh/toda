@@ -64,7 +64,7 @@ impl FdReplacer {
 
     #[tracing::instrument(skip(self))]
     pub fn reopen(&mut self) -> Result<()> {
-        trace!("reopen fd for pid");
+        trace!("reopen fd for pid: {}", self.pid);
 
         let process = match self.process.as_mut() {
             Some(process) => process,
@@ -89,7 +89,9 @@ impl FdReplacer {
                     .ok_or(anyhow!("fd contains non-UTF-8 character"))?
                     .parse()?;
                 if let Ok(path) = read_link(&path) {
-                    if path.exists() && path.starts_with(base_path) {
+                    trace!("handling path: {:?}", path);
+                    if path.starts_with(base_path) {
+                        trace!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
                         self.reopen_file(&thread, fd, path.as_path())?;
                     }
                 }
