@@ -56,9 +56,8 @@ fn main() -> Result<()> {
     let pid = option.pid;
 
     let mut fdreplacer = FdReplacer::new(&path, pid)?;
-    fdreplacer.trace()?;
 
-    let mut injection = MountInjector::create_injection(path, pid, injector_config)?;
+    let mut injection = MountInjector::create_injection(&path, pid, injector_config)?;
 
     let fuse_dev = fuse_device::read_fuse_dev_t()?;
 
@@ -74,8 +73,9 @@ fn main() -> Result<()> {
         },
         option.pid,
     )?;
+
     fdreplacer.reopen()?;
-    fdreplacer.detach()?;
+    drop(fdreplacer);
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     signals.forever().next();
     info!("start to recover and exit");
 
-    fdreplacer.trace()?;
+    fdreplacer = FdReplacer::new(&path, pid)?;
     fdreplacer.reopen()?;
 
     info!("fdreplace reopened");
@@ -98,10 +98,9 @@ fn main() -> Result<()> {
         },
         option.pid,
     )?;
+    drop(fdreplacer);
 
-    fdreplacer.detach()?;
     info!("fdreplace detached");
-
     info!("recover successfully");
     return Ok(());
 }

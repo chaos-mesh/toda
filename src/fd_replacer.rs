@@ -23,8 +23,7 @@ pub struct FdReplacer {
     original_path: PathBuf,
     new_path: PathBuf,
     direction: MountDirection,
-
-    process: Option<ptrace::TracedProcess>,
+    process: ptrace::TracedProcess,
 }
 
 impl FdReplacer {
@@ -51,25 +50,13 @@ impl FdReplacer {
             original_path,
             new_path,
             direction: MountDirection::EnableChaos,
-            process: None,
+            process: ptrace::TracedProcess::trace(pid)?,
         });
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn trace(&mut self) -> Result<()> {
-        self.process = Some(ptrace::TracedProcess::trace(self.pid)?);
-
-        Ok(())
     }
 
     #[tracing::instrument(skip(self))]
     pub fn reopen(&mut self) -> Result<()> {
         trace!("reopen fd for pid: {}", self.pid);
-
-        let process = match self.process.as_mut() {
-            Some(process) => process,
-            None => return Err(anyhow!("reopen is called before trace")),
-        };
 
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
@@ -77,7 +64,7 @@ impl FdReplacer {
             self.original_path.as_path()
         };
 
-        for thread in process.threads() {
+        for thread in self.process.threads() {
             let tid = thread.tid;
             let fd_dir_path = format!("/proc/{}/fd", tid);
             for fd in read_dir(fd_dir_path)?.into_iter() {
@@ -104,20 +91,6 @@ impl FdReplacer {
             self.direction = MountDirection::EnableChaos
         }
         return Ok(());
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn detach(&mut self) -> Result<()> {
-        let process = match self.process.take() {
-            Some(process) => process,
-            None => return Err(anyhow!("reopen is called before trace")),
-        };
-
-        for thread in process.threads() {
-            thread.detach()?;
-        }
-
-        Ok(())
     }
 
     #[tracing::instrument(skip(self, thread, path))]
@@ -160,5 +133,19 @@ impl FdReplacer {
         thread.close(new_open_fd)?;
 
         return Ok(());
+    }
+}
+
+impl Drop for FdReplacer {
+    #[tracing::instrument(skip(self))]
+    fn drop(&mut self) {
+        for thread in self.process.threads() {
+            thread.detach().unwrap_or_else(|err| {
+                panic!(
+                    "fails to detach thread ({}/{}): {}",
+                    self.pid, thread.tid, err
+                )
+            });
+        }
     }
 }
