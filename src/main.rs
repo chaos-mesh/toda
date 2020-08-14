@@ -57,7 +57,7 @@ fn main() -> Result<()> {
 
     let mut injection = MountInjector::create_injection(path, pid, injector_config)?;
 
-    let mut mount_injection = namespace::with_mnt_namespace(
+    let mut mount_injection = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
             injection.mount()?;
 
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
 
     info!("fdreplace reopened");
 
-    namespace::with_mnt_namespace(
+    namespace::with_mnt_pid_namespace(
         box move || -> Result<()> {
             info!("recovering mount");
 
