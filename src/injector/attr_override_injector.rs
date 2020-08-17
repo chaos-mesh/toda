@@ -84,21 +84,20 @@ impl Injector for AttrOverrideInjector {
         match reply {
             Reply::Entry(entry) => {
                 self.inject_attr(&mut entry.stat);
-                Ok(())
             }
             Reply::Attr(attr) => {
                 self.inject_attr(&mut attr.attr);
-                Ok(())
             }
-            _ => Ok(()),
+            _ => (),
         }
+        Ok(())
     }
 }
 
 impl AttrOverrideInjector {
     #[tracing::instrument]
     pub fn build(conf: AttrOverrideConfig) -> anyhow::Result<Self> {
-        trace!("build latency injector");
+        trace!("build attr override injector");
 
         let methods = vec![
             String::from("getattr"),
