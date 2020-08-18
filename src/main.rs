@@ -18,6 +18,7 @@ use mount_injector::MountInjector;
 
 use anyhow::Result;
 use nix::sys::signal::{signal, SigHandler, Signal};
+use nix::sys::mman::{MlockAllFlags, mlockall};
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 use tracing::{info, trace, Level};
@@ -40,6 +41,7 @@ struct Options {
 }
 
 fn main() -> Result<()> {
+    mlockall(MlockAllFlags::MCL_CURRENT)?;
     // ignore dying children
     unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
 
