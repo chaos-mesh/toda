@@ -195,6 +195,11 @@ impl AsyncFileSystemImpl for HookFs {
     fn init(&self) -> Result<()> {
         trace!("init");
 
+        // FIXME: Please tell me why these lines will fix segmentation fault on some systems
+        runtime::spawn(async {
+            trace!("init async runtime!");
+        });
+
         Ok(())
     }
 

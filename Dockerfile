@@ -22,4 +22,4 @@ RUN --mount=type=cache,target=/toda-build/target \
     cargo build
 
 RUN --mount=type=cache,target=/toda-build/target \
-    cp /toda-build/target/release/toda /toda
+    cp /toda-build/target/debug/toda /toda
