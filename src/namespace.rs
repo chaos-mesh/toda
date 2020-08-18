@@ -5,7 +5,7 @@ use nix::sched::setns;
 use nix::sched::CloneFlags;
 use nix::sys::stat;
 
-use std::sync::mpsc::{channel, Sender};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);
@@ -17,19 +17,24 @@ pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
 }
 
 pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) -> Result<R> {
-    let (sender, receiver) = channel::<Result<R>>();
+    // FIXME: memory leak here
+    let mut ret = None;
+    let ret_ptr: AtomicPtr<Option<Result<R>>> = AtomicPtr::new(&mut ret);
 
-    let args = Box::new((f, Box::new(sender), Box::new(pid)));
+    let args = Box::new((f, &ret_ptr, Box::new(pid)));
 
     extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
         let args =
-            unsafe { Box::from_raw(args as *mut (Box<F>, Box<Sender<Result<R>>>, Box<i32>)) };
-        let (f, sender, pid) = *args;
+            unsafe { Box::from_raw(args as *mut (Box<F>, &AtomicPtr<Option<Result<R>>>, Box<i32>)) };
+        let (f, ret_ptr, pid) = *args;
 
         if let Err(err) = enter_mnt_namespace(*pid) {
-            sender.send(Err(err)).unwrap();
+            let ret = Box::new(Some(Err(err)));
+            ret_ptr.store(Box::leak(ret) , Ordering::SeqCst)
         }
-        sender.send(f()).unwrap();
+
+        let ret = Box::new(Some(f()));
+        ret_ptr.store(Box::leak(ret), Ordering::SeqCst);
 
         return 0;
     };
@@ -51,5 +56,15 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
     };
     println!("clone returned {}", pid);
 
-    return receiver.recv()?;
+    loop {
+        let ret = ret_ptr.load(Ordering::SeqCst);
+        unsafe {
+            match (&mut *ret).take() {
+                Some(ret) => {
+                    return ret
+                }
+                None => {}
+            }
+        }
+    }
 }

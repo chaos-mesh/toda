@@ -11,4 +11,4 @@ example-inject:debug-toda
 	cat ./io-inject-example.json|sudo ./target/debug/toda --path /mnt/test --pid $$(pgrep main-app) --verbose trace
 
 debug-toda:
-	cargo build
+	RUSTFLAGS="-Z relro-level=full" cargo build
