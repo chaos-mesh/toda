@@ -7,7 +7,7 @@ use nix::sys::stat;
 
 use std::sync::mpsc::{channel, Sender};
 
-pub fn enter_mnt_pid_namespace(pid: i32) -> Result<()> {
+pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);
     let mnt_ns = open(mnt_ns_path.as_str(), OFlag::O_RDONLY, stat::Mode::all())?;
 
@@ -26,7 +26,7 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
             unsafe { Box::from_raw(args as *mut (Box<F>, Box<Sender<Result<R>>>, Box<i32>)) };
         let (f, sender, pid) = *args;
 
-        if let Err(err) = enter_mnt_pid_namespace(*pid) {
+        if let Err(err) = enter_mnt_namespace(*pid) {
             sender.send(Err(err)).unwrap();
         }
         sender.send(f()).unwrap();

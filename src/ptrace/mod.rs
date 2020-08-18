@@ -129,7 +129,9 @@ impl TracedThread {
                 )?
             };
             ptrace::step(pid, None)?;
-            let _ = wait::waitpid(pid, None)?;
+
+            let status = wait::waitpid(pid, None)?;
+            trace!("wait status: {:?}", status);
             // TODO: check wait result
 
             let regs = ptrace::getregs(pid)?;

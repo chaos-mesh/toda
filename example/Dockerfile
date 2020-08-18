@@ -7,7 +7,7 @@ RUN go get -d -v ./...
 
 RUN go build -o /go/bin/app
 
-FROM ubuntu:18.04
+FROM alpine:3.12
 COPY --from=build-env /go/bin/app /
 COPY --from=build-env /go/bin/app /main-app
 CMD ["/app"]
