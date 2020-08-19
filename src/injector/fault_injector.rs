@@ -24,9 +24,9 @@ pub struct FaultInjector {
 impl Injector for FaultInjector {
     #[tracing::instrument]
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
-        trace!("test for filter");
+        info!("test filter");
         if self.filter.filter(method, path) {
-            trace!("inject io fault");
+            info!("inject io fault");
             let mut rng = rand::thread_rng();
             let attempt: f64 = rng.gen();
             let mut attempt = (attempt * (self.sum as f64)) as i32;
@@ -35,7 +35,7 @@ impl Injector for FaultInjector {
                 attempt -= p;
 
                 if attempt < 0 {
-                    trace!("return with error {}", err);
+                    info!("return with error {}", err);
                     return Err(Error::Sys(*err));
                 }
             }

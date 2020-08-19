@@ -50,9 +50,9 @@ fn main() -> Result<()> {
     let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
-    trace!("parse injector configs");
+    info!("parse injector configs");
     let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
-    trace!("inject with config {:?}", injector_config);
+    info!("inject with config {:?}", injector_config);
 
     let path = option.path;
     let pid = option.pid;

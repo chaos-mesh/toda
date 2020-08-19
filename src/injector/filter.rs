@@ -98,7 +98,7 @@ pub struct Filter {
 impl Filter {
     #[tracing::instrument]
     pub fn build(conf: FilterConfig) -> Result<Self> {
-        trace!("build filter");
+        info!("build filter");
         let mut methods = Method::empty();
         for method in conf.methods.iter() {
             methods |= Method::try_from(method.as_str())?;

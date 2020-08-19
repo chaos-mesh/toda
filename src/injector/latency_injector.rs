@@ -23,9 +23,9 @@ impl Injector for LatencyInjector {
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         trace!("test for filter");
         if self.filter.filter(method, path) {
-            trace!("inject io delay {:?}", self.latency);
+            info!("inject io delay {:?}", self.latency);
             delay_for(self.latency).await;
-            trace!("latency finished");
+            info!("latency finished");
         }
 
         return Ok(());

@@ -81,11 +81,11 @@ impl MountInjector {
                 .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
                 .collect();
 
-            trace!("mount with flags {:?}", flags);
+            info!("mount with flags {:?}", flags);
 
             fuse::spawn_mount(fs, &self.original_path, &flags)?
         };
-        trace!("wait 1 second");
+        info!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         std::thread::sleep(std::time::Duration::from_secs(1));

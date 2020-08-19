@@ -97,7 +97,7 @@ impl Injector for AttrOverrideInjector {
 impl AttrOverrideInjector {
     #[tracing::instrument]
     pub fn build(conf: AttrOverrideConfig) -> anyhow::Result<Self> {
-        trace!("build attr override injector");
+        info!("build attr override injector");
 
         let methods = vec![
             String::from("getattr"),

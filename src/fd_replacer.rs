@@ -10,7 +10,7 @@ use nix::fcntl::FcntlArg;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 
-use tracing::{info, trace};
+use tracing::info;
 
 #[derive(PartialEq, Debug)]
 pub enum MountDirection {
@@ -70,7 +70,7 @@ impl FdReplacer {
 
     #[tracing::instrument(skip(self))]
     pub fn reopen(&self) -> Result<()> {
-        trace!("reopen fd for pid: {}", self.pid);
+        info!("reopen fd for pid: {}", self.pid);
 
         let base_path = if self.direction == MountDirection::EnableChaos {
             self.new_path.as_path()
@@ -90,9 +90,9 @@ impl FdReplacer {
                     .ok_or(anyhow!("fd contains non-UTF-8 character"))?
                     .parse()?;
                 if let Ok(path) = read_link(&path) {
-                    trace!("handling path: {:?}", path);
+                    info!("handling path: {:?}", path);
                     if path.starts_with(base_path) {
-                        trace!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
+                        info!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
                         self.reopen_file(&thread, fd, path.as_path())?;
                     }
                 }
