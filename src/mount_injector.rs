@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
 
-use tracing::trace;
+use tracing::info;
 
 #[derive(Debug)]
 pub struct MountInjector {

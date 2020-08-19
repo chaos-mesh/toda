@@ -21,7 +21,7 @@ use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::mman::{MlockAllFlags, mlockall};
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
-use tracing::{info, trace, Level};
+use tracing::{info, Level};
 use tracing_subscriber;
 
 use std::path::PathBuf;

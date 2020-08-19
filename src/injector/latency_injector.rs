@@ -9,7 +9,7 @@ use super::Injector;
 use crate::hookfs::Result;
 
 use tokio::time::delay_for;
-use tracing::trace;
+use tracing::{trace ,info};
 
 #[derive(Debug)]
 pub struct LatencyInjector {

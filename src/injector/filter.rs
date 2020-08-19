@@ -8,7 +8,7 @@ use bitflags::bitflags;
 use glob::{MatchOptions, Pattern};
 use rand::Rng;
 
-use tracing::trace;
+use tracing::{trace, info};
 
 bitflags! {
     pub struct Method: u32 {
