@@ -119,18 +119,21 @@ impl Filter {
         let mut rng = rand::thread_rng();
         let p: f64 = rng.gen();
 
-        trace!("path filter: {}", self.path_filter.matches_path(path));
-        trace!("method filter: {}", (!(self.methods & *method).is_empty()));
-        trace!("probability: {}", p < self.probability);
-
-        return self.path_filter.matches_path_with(
+        let match_path = self.path_filter.matches_path_with(
             path,
             MatchOptions {
                 case_sensitive: true,
                 require_literal_separator: true,
                 require_literal_leading_dot: false,
             },
-        ) && (!(self.methods & *method).is_empty())
-            && p < self.probability;
+        );
+        let match_method = !(self.methods & *method).is_empty();
+        let match_probability = p < self.probability;
+        trace!("path filter: {}", match_path);
+        trace!("method filter: {}", match_method);
+        trace!("probability: {}", match_probability);
+
+        return match_path && match_method
+            && match_probability;
     }
 }

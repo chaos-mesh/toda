@@ -81,6 +81,7 @@ impl Injector for AttrOverrideInjector {
             return Ok(());
         }
 
+        info!("overriding attributes");
         match reply {
             Reply::Entry(entry) => {
                 self.inject_attr(&mut entry.stat);
@@ -88,7 +89,9 @@ impl Injector for AttrOverrideInjector {
             Reply::Attr(attr) => {
                 self.inject_attr(&mut attr.attr);
             }
-            _ => (),
+            _ => {
+                info!("reply without attributes");
+            },
         }
         Ok(())
     }
