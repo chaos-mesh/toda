@@ -5,6 +5,7 @@ use crate::InjectorConfig;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
@@ -18,6 +19,7 @@ pub struct MountInjector {
     fuse_session: Option<BackgroundSession<'static>>,
     mounts: mount::MountsInfo,
     injector_config: Vec<InjectorConfig>,
+    hookfs: Option<Arc<hookfs::HookFs>>
 }
 
 impl MountInjector {
@@ -48,6 +50,7 @@ impl MountInjector {
             fuse_session: None,
             mounts: mount::MountsInfo::parse_mounts(pid)?,
             injector_config,
+            hookfs: None,
         });
     }
 
@@ -67,6 +70,7 @@ impl MountInjector {
             &self.new_path,
             injectors,
         ));
+        let inner_fs = fs.clone_inner();
         let session = unsafe {
             std::fs::create_dir_all(self.new_path.as_path())?;
 
@@ -91,8 +95,21 @@ impl MountInjector {
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         self.fuse_session = Some(session);
+        self.hookfs = Some(inner_fs);
 
         return Ok(());
+    }
+
+    pub fn enable_injection(&self) {
+        if let Some(hookfs) = &self.hookfs {
+            hookfs.enable_injection();
+        }
+    }
+
+    pub fn disable_injection(&self) {
+        if let Some(hookfs) = &self.hookfs {
+            hookfs.disable_injection();
+        }
     }
 
     #[tracing::instrument(skip(self))]

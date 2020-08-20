@@ -37,6 +37,7 @@ use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
 pub use errors::{HookFsError as Error, Result};
@@ -50,20 +51,24 @@ use tokio::sync::RwLock;
 
 macro_rules! inject {
     ($self:ident, $method:ident, $path:expr) => {
-        $self
-            .injector
-            .inject(&Method::$method, $self.rebuild_path($path)?.as_path())
-            .await?;
+        if $self.enable_injection.load(Ordering::SeqCst) {
+            $self
+                .injector
+                .inject(&Method::$method, $self.rebuild_path($path)?.as_path())
+                .await?;
+        }
     };
 }
 
 macro_rules! inject_reply {
     ($self:ident, $method:ident, $path:expr, $reply:ident, $reply_typ:ident) => {
-        $self.injector.inject_reply(
-            &Method::$method,
-            $self.rebuild_path($path)?.as_path(),
-            &mut Reply::$reply_typ(&mut $reply),
-        )?;
+        if $self.enable_injection.load(Ordering::SeqCst) {
+            $self.injector.inject_reply(
+                &Method::$method,
+                $self.rebuild_path($path)?.as_path(),
+                &mut Reply::$reply_typ(&mut $reply),
+            )?;
+        }
     };
 }
 
@@ -71,6 +76,8 @@ macro_rules! inject_reply {
 pub struct HookFs {
     mount_path: PathBuf,
     original_path: PathBuf,
+
+    enable_injection: AtomicBool,
 
     opened_files: RwLock<FhMap<File>>,
 
@@ -135,7 +142,16 @@ impl HookFs {
             opened_dirs: RwLock::new(FhMap::from(Slab::new())),
             injector: injector,
             inode_map,
+            enable_injection: AtomicBool::from(false),
         }
+    }
+
+    pub fn enable_injection(&self) {
+        self.enable_injection.store(true, Ordering::SeqCst);
+    }
+
+    pub fn disable_injection(&self) {
+        self.enable_injection.store(false, Ordering::SeqCst);
     }
 
     pub fn rebuild_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {

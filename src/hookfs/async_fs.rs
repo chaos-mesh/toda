@@ -167,6 +167,12 @@ pub trait AsyncFileSystemImpl: Send + Sync {
 
 pub struct AsyncFileSystem<T>(Arc<T>);
 
+impl<T> AsyncFileSystem<T> {
+    pub fn clone_inner(&self) -> Arc<T> {
+        self.0.clone()
+    }
+}
+
 impl<T: AsyncFileSystemImpl> From<T> for AsyncFileSystem<T> {
     fn from(inner: T) -> Self {
         Self(Arc::new(inner))

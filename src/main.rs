@@ -81,9 +81,15 @@ fn main() -> Result<()> {
 
     let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
 
+    info!("enable injection");
+    mount_injection.enable_injection();
+
     info!("waiting for signal to exit");
     signals.forever().next();
     info!("start to recover and exit");
+
+    info!("disable injection");
+    mount_injection.disable_injection();
 
     fdreplacer = FdReplacer::disable(&path, pid)?;
     fdreplacer.reopen()?;
