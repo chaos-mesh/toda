@@ -100,8 +100,12 @@ impl Filter {
     pub fn build(conf: FilterConfig) -> Result<Self> {
         info!("build filter");
         let mut methods = Method::empty();
-        for method in conf.methods.iter() {
-            methods |= Method::try_from(method.as_str())?;
+        if let Some(conf_methods) = conf.methods {
+            for method in conf_methods.iter() {
+                methods |= Method::try_from(method.as_str())?;
+            }
+        } else {
+            methods = Method::all()
         }
 
         Ok(Self {

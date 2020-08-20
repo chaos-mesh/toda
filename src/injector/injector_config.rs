@@ -33,7 +33,7 @@ pub struct FaultsConfig {
 #[serde(rename_all = "camelCase")]
 pub struct FilterConfig {
     pub path: String,
-    pub methods: Vec<String>,
+    pub methods: Option<Vec<String>>,
     pub percent: i32,
 }
 

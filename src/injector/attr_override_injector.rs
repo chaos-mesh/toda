@@ -109,7 +109,7 @@ impl AttrOverrideInjector {
         ];
         let filter = filter::Filter::build(FilterConfig {
             path: conf.path,
-            methods,
+            methods: Some(methods),
             percent: conf.percent,
         })?;
 
