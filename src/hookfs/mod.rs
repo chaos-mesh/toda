@@ -247,7 +247,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with {:?}", stat);
 
         let mut reply = Entry::new(stat, 0);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
+        trace!("after inject {:?}", reply);
 
         return Ok(reply);
     }
@@ -271,10 +273,12 @@ impl AsyncFileSystemImpl for HookFs {
             .await
             .map(convert_libc_stat_to_fuse_stat)??;
 
-        let mut reply = Attr::new(stat);
-        inject_reply!(self, GETATTR, path, reply, Attr);
-
         trace!("return with {:?}", stat);
+
+        let mut reply = Attr::new(stat);
+        trace!("before inject {:?}", reply);
+        inject_reply!(self, GETATTR, path, reply, Attr);
+        trace!("after inject {:?}", reply);
 
         Ok(reply)
     }
@@ -336,7 +340,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("reply with data: {:?}", data);
 
         let mut reply = Data::new(path.into_bytes());
+        trace!("before inject {:?}", reply);
         inject_reply!(self, READLINK, link_path, reply, Data);
+        trace!("after inject {:?}", reply);
 
         Ok(reply)
     }
@@ -523,7 +529,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with fh: {}, flags: {}", fh, 0);
 
         let mut reply = Open::new(fh, 0);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, OPEN, path, reply, Open);
+        trace!("after inject {:?}", reply);
         // TODO: force DIRECT_IO is not a great option
         Ok(reply)
     }
@@ -557,7 +565,9 @@ impl AsyncFileSystemImpl for HookFs {
         }
 
         let mut reply = Data::new(buf);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, READ, path, reply, Data);
+        trace!("after inject {:?}", reply);
         Ok(reply)
     }
     #[tracing::instrument(skip(data))]
@@ -583,7 +593,9 @@ impl AsyncFileSystemImpl for HookFs {
         file.write_all(&data).await?;
 
         let mut reply = Write::new(data.len() as u32);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, WRITE, path, reply, Write);
+        trace!("after inject {:?}", reply);
         Ok(reply)
     }
     #[tracing::instrument]
@@ -655,7 +667,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with fh: {}, flags: {}", fh, flags);
 
         let mut reply = Open::new(fh, flags);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, OPENDIR, path, reply, Open);
+        trace!("after inject {:?}", reply);
         Ok(reply)
     }
 
@@ -800,7 +814,9 @@ impl AsyncFileSystemImpl for HookFs {
             stat.maximum_name_length() as u32,
             stat.block_size() as u32,
         );
+        trace!("before inject {:?}", reply);
         inject_reply!(self, STATFS, path, reply, StatFs);
+        trace!("after inject {:?}", reply);
 
         Ok(reply)
     }
@@ -873,7 +889,9 @@ impl AsyncFileSystemImpl for HookFs {
             trace!("return with data {:?}", shared_buf.as_slice());
             Xattr::data(shared_buf.as_slice().to_owned())
         };
+        trace!("before inject {:?}", reply);
         inject_reply!(self, GETXATTR, path, reply, Xattr);
+        trace!("after inject {:?}", reply);
 
         return Ok(reply);
     }
@@ -908,7 +926,9 @@ impl AsyncFileSystemImpl for HookFs {
         } else {
             Xattr::data(shared_buf.as_slice().to_owned())
         };
+        trace!("before inject {:?}", reply);
         inject_reply!(self, LISTXATTR, path, reply, Xattr);
+        trace!("after inject {:?}", reply);
 
         return Ok(reply);
     }
@@ -994,7 +1014,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with stat: {:?} fh: {}", stat, fh);
 
         let mut reply = Create::new(stat, 0, fh as u64, flags);
+        trace!("before inject {:?}", reply);
         inject_reply!(self, CREATE, path.as_path(), reply, Create);
+        trace!("after inject {:?}", reply);
         Ok(reply)
     }
     #[tracing::instrument]
