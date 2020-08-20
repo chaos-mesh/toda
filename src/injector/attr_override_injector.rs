@@ -7,7 +7,7 @@ use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
 use fuse::{FileAttr, FileType};
 use time::Timespec;
-use tracing::info;
+use tracing::{info, trace};
 
 use std::path::Path;
 
@@ -32,39 +32,51 @@ pub struct AttrOverrideInjector {
 impl AttrOverrideInjector {
     fn inject_attr(&self, attr: &mut FileAttr) {
         if let Some(ino) = self.ino {
+            trace!("overriding ino");
             attr.ino = ino
         }
         if let Some(size) = self.size {
+            trace!("overriding size");
             attr.size = size
         }
         if let Some(blocks) = self.blocks {
+            trace!("overriding block");
             attr.blocks = blocks
         }
         if let Some(atime) = self.atime {
+            trace!("overriding atime");
             attr.atime = atime
         }
         if let Some(mtime) = self.mtime {
+            trace!("overriding mtime");
             attr.mtime = mtime
         }
         if let Some(ctime) = self.ctime {
+            trace!("overriding ctime");
             attr.ctime = ctime
         }
         if let Some(kind) = self.kind {
+            trace!("overriding kind");
             attr.kind = kind
         }
         if let Some(perm) = self.perm {
+            trace!("overriding perm");
             attr.perm = perm
         }
         if let Some(nlink) = self.nlink {
+            trace!("overriding nlink");
             attr.nlink = nlink
         }
         if let Some(uid) = self.uid {
+            trace!("overriding uid");
             attr.uid = uid
         }
         if let Some(gid) = self.gid {
+            trace!("overriding gid");
             attr.gid = gid
         }
         if let Some(rdev) = self.rdev {
+            trace!("overriding rdev");
             attr.rdev = rdev
         }
     }
