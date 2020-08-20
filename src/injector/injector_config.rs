@@ -7,7 +7,7 @@ use std::time::Duration;
 #[serde(rename_all = "camelCase")]
 pub enum InjectorConfig {
     Latency(LatencyConfig),
-    Faults(FaultsConfig),
+    Fault(FaultsConfig),
     AttrOverride(AttrOverrideConfig),
 }
 

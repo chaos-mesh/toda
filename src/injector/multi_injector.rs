@@ -24,7 +24,7 @@ impl MultiInjector {
 
         for injector in conf.into_iter() {
             let injector = match injector {
-                InjectorConfig::Faults(faults) => {
+                InjectorConfig::Fault(faults) => {
                     (box FaultInjector::build(faults)?) as Box<dyn Injector>
                 }
                 InjectorConfig::Latency(latency) => {
