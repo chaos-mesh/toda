@@ -59,11 +59,8 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
     loop {
         let ret = ret_ptr.load(Ordering::SeqCst);
         unsafe {
-            match (&mut *ret).take() {
-                Some(ret) => {
-                    return ret
-                }
-                None => {}
+            if let Some(ret) = (&mut *ret).take() {
+                return ret
             }
         }
     }

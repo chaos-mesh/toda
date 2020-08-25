@@ -695,16 +695,12 @@ impl AsyncFileSystemImpl for HookFs {
                 return;
             }
         };
-        match self
+        if let Err(err) = self
             .injector
             .inject(&Method::READDIR, rebuilt_path.as_path())
-            .await
-        {
-            Err(err) => {
-                reply.error(err.into());
-                return;
-            }
-            _ => {}
+            .await {
+            reply.error(err.into());
+            return;
         }
         let offset = offset as usize;
 

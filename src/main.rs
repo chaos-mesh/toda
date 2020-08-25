@@ -1,6 +1,7 @@
 #![feature(box_syntax)]
 #![feature(async_closure)]
 #![allow(clippy::or_fun_call)]
+#![allow(clippy::too_many_arguments)]
 
 extern crate derive_more;
 

@@ -103,17 +103,17 @@ impl TracedThread {
             for (index, arg) in args.iter().enumerate() {
                 // All these registers are hard coded for x86 platform
                 if index == 0 {
-                    regs.rdi = arg.clone()
+                    regs.rdi = *arg
                 } else if index == 1 {
-                    regs.rsi = arg.clone()
+                    regs.rsi = *arg
                 } else if index == 2 {
-                    regs.rdx = arg.clone()
+                    regs.rdx = *arg
                 } else if index == 3 {
-                    regs.r10 = arg.clone()
+                    regs.r10 = *arg
                 } else if index == 4 {
-                    regs.r8 = arg.clone()
+                    regs.r8 = *arg
                 } else if index == 5 {
-                    regs.r9 = arg.clone()
+                    regs.r9 = *arg
                 } else {
                     return Err(anyhow!("too many arguments for a syscall"));
                 }
