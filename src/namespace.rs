@@ -36,7 +36,7 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
         let ret = Box::new(Some(f()));
         ret_ptr.store(Box::leak(ret), Ordering::SeqCst);
 
-        return 0;
+        0
     };
 
     let mut stack = vec![0u8; 1024 * 1024];

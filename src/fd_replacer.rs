@@ -23,7 +23,7 @@ pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf
         return Err(anyhow!("path is the root"));
     }
 
-    let mut new_path: PathBuf = base_path.clone();
+    let mut new_path: PathBuf = base_path;
     let original_filename = original_path
         .file_name()
         .ok_or(anyhow!("the path terminates in `..` or `/`"))?
@@ -32,7 +32,7 @@ pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf
     let new_filename = format!("__chaosfs__{}__", original_filename);
     new_path.push(new_filename.as_str());
 
-    return Ok((original_path, new_path))
+    Ok((original_path, new_path))
 }
 
 impl FdReplacer {
@@ -71,9 +71,9 @@ impl FdReplacer {
             }
         }
 
-        return Ok(FdReplacer {
+        Ok(FdReplacer {
             processes,
-        });
+        })
     }
 
     #[tracing::instrument(skip(self, original_path, new_path))]
@@ -116,7 +116,7 @@ impl FdReplacer {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, thread, new_path))]
@@ -135,7 +135,7 @@ impl FdReplacer {
         thread.dup2(new_open_fd, fd)?;
         thread.close(new_open_fd)?;
 
-        return Ok(());
+        Ok(())
     }
 }
 

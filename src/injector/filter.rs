@@ -133,7 +133,7 @@ impl Filter {
         trace!("method filter: {}", match_method);
         trace!("probability: {}", match_probability);
 
-        return match_path && match_method
-            && match_probability;
+        match_path && match_method
+            && match_probability
     }
 }

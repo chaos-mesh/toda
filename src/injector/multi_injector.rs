@@ -37,7 +37,7 @@ impl MultiInjector {
             injectors.push(injector)
         }
 
-        return Ok(Self { injectors });
+        Ok(Self { injectors })
     }
 }
 
@@ -57,6 +57,6 @@ impl Injector for MultiInjector {
             injector.inject_reply(method, path, reply)?
         }
 
-        return Ok(());
+        Ok(())
     }
 }

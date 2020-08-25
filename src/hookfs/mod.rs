@@ -140,7 +140,7 @@ impl HookFs {
             original_path: original_path.as_ref().to_owned(),
             opened_files: RwLock::new(FhMap::from(Slab::new())),
             opened_dirs: RwLock::new(FhMap::from(Slab::new())),
-            injector: injector,
+            injector,
             inode_map,
             enable_injection: AtomicBool::from(false),
         }
@@ -187,7 +187,7 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         libc::S_IFSOCK => FileType::Socket,
         _ => return Err(Error::UnknownFileType),
     };
-    return Ok(FileAttr {
+    Ok(FileAttr {
         ino: stat.st_ino,
         size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
@@ -202,7 +202,7 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         rdev: stat.st_rdev as u32,
         crtime: Timespec::new(0, 0), // It's macOS only
         flags: 0,                    // It's macOS only
-    });
+    })
 }
 
 #[async_trait]
@@ -1066,8 +1066,8 @@ async fn async_chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<
     spawn_blocking(move || {
         chown(
             &path_clone,
-            uid.map(|uid| Uid::from_raw(uid)),
-            gid.map(|gid| Gid::from_raw(gid)),
+            uid.map(Uid::from_raw),
+            gid.map(Gid::from_raw),
         )
     })
     .await??;

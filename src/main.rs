@@ -1,5 +1,6 @@
 #![feature(box_syntax)]
 #![feature(async_closure)]
+#![allow(clippy::or_fun_call)]
 
 extern crate derive_more;
 
@@ -22,7 +23,7 @@ use nix::sys::mman::{MlockAllFlags, mlockall};
 use signal_hook::iterator::Signals;
 use structopt::StructOpt;
 use tracing::{info, Level};
-use tracing_subscriber;
+
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -64,7 +65,7 @@ fn inject(option: Options) -> Result<MountInjector> {
             fdreplacer.reopen(original_path.as_path(), new_path.as_path())?;
             drop(fdreplacer);
 
-            return Ok(injection);
+            Ok(injection)
         },
         option.pid,
     )?;
@@ -94,7 +95,7 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
             drop(fdreplacer);
             info!("fdreplace detached");
             info!("recover successfully");
-            return Ok(());
+            Ok(())
         },
         option.pid,
     )?;
@@ -119,7 +120,7 @@ fn main() -> Result<()> {
     signals.forever().next();
     info!("start to recover and exit");
 
-    resume(option.clone(), mount_injector)?;
+    resume(option, mount_injector)?;
     
-    return Ok(());
+    Ok(())
 }

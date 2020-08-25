@@ -46,7 +46,7 @@ impl TracedProcess {
             tids.push(tid);
         }
 
-        return Ok(TracedProcess { tids });
+        Ok(TracedProcess { tids })
     }
 
     pub fn threads(&self) -> Vec<TracedThread> {
@@ -75,7 +75,7 @@ impl TracedThread {
             regs,
             rip_ins,
         };
-        return Ok(guard);
+        Ok(guard)
     }
 
     #[tracing::instrument(skip(f))]
@@ -86,14 +86,14 @@ impl TracedThread {
 
         drop(guard);
 
-        return Ok(ret);
+        Ok(ret)
     }
 
     #[tracing::instrument]
     fn syscall(&self, id: u64, args: &[u64]) -> Result<u64> {
         trace!("run syscall {} {:?}", id, args);
 
-        return self.with_protect(|thread| -> Result<u64> {
+        self.with_protect(|thread| -> Result<u64> {
             let pid = Pid::from_raw(thread.tid);
 
             let mut regs = ptrace::getregs(pid)?;
@@ -136,25 +136,25 @@ impl TracedThread {
 
             let regs = ptrace::getregs(pid)?;
 
-            return Ok(regs.rax);
-        });
+            Ok(regs.rax)
+        })
     }
 
     #[tracing::instrument]
     pub fn detach(&self) -> Result<()> {
         ptrace::detach(Pid::from_raw(self.tid), None)?;
 
-        return Ok(());
+        Ok(())
     }
 
     #[tracing::instrument]
     pub fn dup2(&self, old_fd: u64, new_fd: u64) -> Result<u64> {
-        return self.syscall(33, &[old_fd, new_fd]);
+        self.syscall(33, &[old_fd, new_fd])
     }
 
     #[tracing::instrument]
     pub fn close(&self, fd: u64) -> Result<u64> {
-        return self.syscall(3, &[fd]);
+        self.syscall(3, &[fd])
     }
 
     #[tracing::instrument]
@@ -164,7 +164,7 @@ impl TracedThread {
             F_GETFL => (libc::F_GETFL, 0),
             _ => unimplemented!(),
         };
-        return self.syscall(72, &[fd, cmd as u64, args as u64]);
+        self.syscall(72, &[fd, cmd as u64, args as u64])
     }
 
     #[tracing::instrument]
@@ -172,15 +172,15 @@ impl TracedThread {
         let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
 
-        return self.syscall(
+        self.syscall(
             9,
             &[0, length, prot.bits() as u64, flags.bits() as u64, fd, 0],
-        );
+        )
     }
 
     #[tracing::instrument]
     pub fn munmap(&self, addr: u64, len: u64) -> Result<u64> {
-        return self.syscall(11, &[addr, len]);
+        self.syscall(11, &[addr, len])
     }
 
     #[tracing::instrument(skip(f))]
@@ -191,19 +191,19 @@ impl TracedThread {
 
         self.munmap(addr, len)?;
 
-        return Ok(ret);
+        Ok(ret)
     }
 
     #[tracing::instrument(skip(path))]
     pub fn open<P: AsRef<Path>>(&self, path: P, flags: OFlag, mode: Mode) -> Result<u64> {
         // TODO: 4096 is hard coded size. Replace it.
-        return self.with_mmap(4096, |thread, addr| -> Result<u64> {
+        self.with_mmap(4096, |thread, addr| -> Result<u64> {
             let pid = Pid::from_raw(thread.tid);
             let path: &[u8] = path.as_ref().as_os_str().as_bytes();
 
             process_vm_writev(
                 pid,
-                &[IoVec::from_slice(path.as_ref())],
+                &[IoVec::from_slice(path)],
                 &[RemoteIoVec {
                     base: addr as usize,
                     len: path.len(),
@@ -212,8 +212,8 @@ impl TracedThread {
 
             let ret = self.syscall(2, &[addr, flags.bits() as u64, mode.bits() as u64])?;
 
-            return Ok(ret);
-        });
+            Ok(ret)
+        })
     }
 }
 

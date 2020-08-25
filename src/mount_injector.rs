@@ -34,7 +34,7 @@ impl MountInjector {
             return Err(anyhow!("path is the root"));
         }
 
-        let mut new_path: PathBuf = base_path.clone();
+        let mut new_path: PathBuf = base_path;
         let original_filename = original_path
             .file_name()
             .ok_or(anyhow!("the path terminates in `..` or `/`"))?
@@ -43,14 +43,14 @@ impl MountInjector {
         let new_filename = format!("__chaosfs__{}__", original_filename);
         new_path.push(new_filename.as_str());
 
-        return Ok(MountInjector {
+        Ok(MountInjector {
             original_path,
             new_path,
             fuse_session: None,
             mounts: mount::MountsInfo::parse_mounts()?,
             injector_config,
             hookfs: None,
-        });
+        })
     }
 
     pub fn mount(&mut self) -> Result<()> {
@@ -96,7 +96,7 @@ impl MountInjector {
         self.fuse_session = Some(session);
         self.hookfs = Some(inner_fs);
 
-        return Ok(());
+        Ok(())
     }
 
     pub fn enable_injection(&self) {
@@ -125,6 +125,6 @@ impl MountInjector {
             return Err(anyhow!("inject on a root mount"));
         }
 
-        return Ok(());
+        Ok(())
     }
 }

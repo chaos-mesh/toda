@@ -19,11 +19,11 @@ impl MountsInfo {
         mounts.read_to_string(&mut contents)?;
 
         let mounts = contents
-            .split("\n")
-            .map(|item| item.split(" ").nth(1).unwrap_or("").to_owned())
+            .split('\n')
+            .map(|item| item.split(' ').nth(1).unwrap_or("").to_owned())
             .collect();
 
-        return Ok(MountsInfo { mounts });
+        Ok(MountsInfo { mounts })
     }
 
     pub fn non_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
@@ -39,7 +39,7 @@ impl MountsInfo {
                 return Ok(true);
             }
         }
-        return Ok(false);
+        Ok(false)
     }
 
     pub fn move_mount<P1: AsRef<Path>, P2: AsRef<Path>>(
@@ -62,6 +62,6 @@ impl MountsInfo {
             target_path.as_ref().display()
         ))?;
 
-        return Ok(());
+        Ok(())
     }
 }
