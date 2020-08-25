@@ -19,7 +19,7 @@
         "latency": "5s"
     },
     {
-        "type": "faults",
+        "type": "fault",
         "path": "/mnt/test/*",
         "methods": [
             "read",

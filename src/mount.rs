@@ -13,8 +13,8 @@ pub struct MountsInfo {
 }
 
 impl MountsInfo {
-    pub fn parse_mounts(pid: i32) -> Result<Self> {
-        let mut mounts = File::open(format!("/proc/{}/mounts", pid))?;
+    pub fn parse_mounts() -> Result<Self> {
+        let mut mounts = File::open("/proc/mounts")?;
         let mut contents = String::new();
         mounts.read_to_string(&mut contents)?;
 

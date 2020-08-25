@@ -25,7 +25,6 @@ pub struct MountInjector {
 impl MountInjector {
     pub fn create_injection<P: AsRef<Path>>(
         path: P,
-        pid: i32,
         injector_config: Vec<InjectorConfig>,
     ) -> Result<MountInjector> {
         let original_path: PathBuf = path.as_ref().to_owned();
@@ -48,7 +47,7 @@ impl MountInjector {
             original_path,
             new_path,
             fuse_session: None,
-            mounts: mount::MountsInfo::parse_mounts(pid)?,
+            mounts: mount::MountsInfo::parse_mounts()?,
             injector_config,
             hookfs: None,
         });
