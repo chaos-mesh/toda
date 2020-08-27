@@ -3,9 +3,12 @@ use anyhow::Result;
 use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
+use nix::errno::errno;
 use nix::sys::stat;
 
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+use tracing::{info, error};
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);
@@ -46,15 +49,22 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
 
     setns(pid_ns, CloneFlags::CLONE_NEWPID)?;
 
+    let clone_flags = libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SYSVSEM
+    | libc::CLONE_SIGHAND ;
+
     let pid = unsafe {
         libc::clone(
             callback::<F, R>,
             (stack.as_mut_ptr() as *mut libc::c_void).add(1024 * 1024),
-            libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SIGHAND | libc::SIGCHLD,
+            clone_flags | libc::SIGCHLD,
             Box::into_raw(args) as *mut libc::c_void,
         )
     };
-    println!("clone returned {}", pid);
+    if pid == -1 {
+        error!("clone returned with error: {:?}", errno());
+        panic!();
+    }
+    info!("clone returned {}", pid);
 
     loop {
         let ret = ret_ptr.load(Ordering::SeqCst);

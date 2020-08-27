@@ -87,7 +87,7 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
             let fdreplacer = FdReplacer::prepare(&path)?;
             let (original_path, new_path) = encode_path(path)?;
             fdreplacer.reopen(original_path, new_path)?;
-            info!("fdreplace reopened");
+            info!("fdreplacer reopened");
 
             info!("recovering mount");
             // TODO: retry umount multiple times
