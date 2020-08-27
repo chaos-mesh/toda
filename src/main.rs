@@ -14,13 +14,13 @@ mod mount_injector;
 mod namespace;
 mod ptrace;
 
-use fd_replacer::{FdReplacer, encode_path};
+use fd_replacer::{encode_path, FdReplacer};
 use injector::InjectorConfig;
 use mount_injector::MountInjector;
 
 use anyhow::Result;
+use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
-use nix::sys::mman::{MlockAllFlags, mlockall};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
 use tracing::{info, Level};
@@ -61,7 +61,7 @@ fn inject(option: Options) -> Result<MountInjector> {
             injection.mount()?;
 
             // At this time, `mount --move` has already been executed.
-            // Our FUSE are mounted on the "path", so we 
+            // Our FUSE are mounted on the "path", so we
             let (new_path, original_path) = encode_path(&path)?;
             fdreplacer.reopen(original_path.as_path(), new_path.as_path())?;
             drop(fdreplacer);
@@ -108,7 +108,7 @@ static mut SIGNAL_PIPE_WRITER: RawFd = 0;
 
 const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 
-extern fn signal_handler(_: libc::c_int) {
+extern "C" fn signal_handler(_: libc::c_int) {
     unsafe {
         write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
     }
@@ -118,7 +118,9 @@ fn main() -> Result<()> {
     mlockall(MlockAllFlags::MCL_CURRENT)?;
 
     let (reader, writer) = pipe()?;
-    unsafe {SIGNAL_PIPE_WRITER = writer;}
+    unsafe {
+        SIGNAL_PIPE_WRITER = writer;
+    }
 
     // ignore dying children
     unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
@@ -138,6 +140,6 @@ fn main() -> Result<()> {
     info!("start to recover and exit");
 
     resume(option, mount_injector)?;
-    
+
     Ok(())
 }

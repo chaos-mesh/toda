@@ -37,20 +37,18 @@ pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf
 
 impl FdReplacer {
     #[tracing::instrument(skip(base_path))]
-    pub fn prepare<P: AsRef<Path>>(
-        base_path: P
-    ) -> Result<FdReplacer> {
+    pub fn prepare<P: AsRef<Path>>(base_path: P) -> Result<FdReplacer> {
         let pids = read_dir("/proc")?
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok());
-        
+
         let mut processes = Vec::new();
-        for pid in pids {
+        'pid_loop: for pid in pids {
             let entries = match read_dir(format!("/proc/{}/fd", pid)) {
-                Ok(entries)  => entries,
+                Ok(entries) => entries,
                 Err(err) => {
                     warn!("fail to read /proc/{}/fd: {:?}", pid, err);
-                    continue
+                    continue;
                 }
             };
             for entry in entries {
@@ -65,52 +63,54 @@ impl FdReplacer {
                 let path = entry.path();
                 if let Ok(path) = read_link(&path) {
                     if path.starts_with(base_path.as_ref()) {
-                        processes.push(ptrace::TracedProcess::trace(pid)?)
+                        processes.push(ptrace::TracedProcess::trace(pid)?);
+                        
+                        continue 'pid_loop
                     }
                 }
             }
         }
 
-        Ok(FdReplacer {
-            processes,
-        })
+        Ok(FdReplacer { processes })
     }
 
     #[tracing::instrument(skip(self, original_path, new_path))]
-    pub fn reopen<P1: AsRef<Path>, P2: AsRef<Path>>(&self, original_path: P1, new_path: P2) -> Result<()> {
+    pub fn reopen<P1: AsRef<Path>, P2: AsRef<Path>>(
+        &self,
+        original_path: P1,
+        new_path: P2,
+    ) -> Result<()> {
         let base_path = original_path.as_ref();
 
         for process in self.processes.iter() {
-            for thread in process.threads() {
-                let tid = thread.tid;
-                info!("reopen fd for tid: {}", tid);
+            let tid = process.pid;
+            info!("reopen fd for tid: {}", tid);
 
-                let fd_dir_path = format!("/proc/{}/fd", tid);
-                for fd in read_dir(fd_dir_path)?.into_iter() {
-                    let path = fd?.path();
-                    let fd = path
-                        .file_name()
-                        .ok_or(anyhow!("fd doesn't contain a filename"))?
-                        .to_str()
-                        .ok_or(anyhow!("fd contains non-UTF-8 character"))?
-                        .parse()?;
-                    if let Ok(path) = read_link(&path) {
-                        info!("handling path: {:?}", path);
-                        if path.starts_with(base_path) {
-                            info!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
-                            
-                            let base_path = original_path.as_ref();
-                            let striped_path = path.as_path().strip_prefix(base_path)?;
-                            let new_path = new_path.as_ref().join(striped_path);
-                            info!(
-                                "reopen fd: {} for pid {}, from {} to {}",
-                                fd,
-                                thread.tid,
-                                path.display(),
-                                new_path.display()
-                            );
-                            self.reopen_file(&thread, fd, new_path.as_path())?;
-                        }
+            let fd_dir_path = format!("/proc/{}/fd", tid);
+            for fd in read_dir(fd_dir_path)?.into_iter() {
+                let path = fd?.path();
+                let fd = path
+                    .file_name()
+                    .ok_or(anyhow!("fd doesn't contain a filename"))?
+                    .to_str()
+                    .ok_or(anyhow!("fd contains non-UTF-8 character"))?
+                    .parse()?;
+                if let Ok(path) = read_link(&path) {
+                    info!("handling path: {:?}", path);
+                    if path.starts_with(base_path) {
+                        info!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
+
+                        let base_path = original_path.as_ref();
+                        let striped_path = path.as_path().strip_prefix(base_path)?;
+                        let new_path = new_path.as_ref().join(striped_path);
+                        info!(
+                            "reopen fd: {} for pid {}, from {} to {}",
+                            fd,
+                            process.pid,
+                            path.display(),
+                            new_path.display()
+                        );
+                        self.reopen_file(&process, fd, new_path.as_path())?;
                     }
                 }
             }
@@ -119,21 +119,21 @@ impl FdReplacer {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, thread, new_path))]
+    #[tracing::instrument(skip(self, process, new_path))]
     fn reopen_file<P: AsRef<Path>>(
         &self,
-        thread: &ptrace::TracedThread,
+        process: &ptrace::TracedProcess,
         fd: u64,
         new_path: P,
     ) -> Result<()> {
-        let flags = thread.fcntl(fd, FcntlArg::F_GETFL)?;
+        let flags = process.fcntl(fd, FcntlArg::F_GETFL)?;
         let flags = OFlag::from_bits_truncate(flags as i32);
 
         info!("fcntl get flags {:?}", flags);
 
-        let new_open_fd = thread.open(new_path, flags, Mode::empty())?;
-        thread.dup2(new_open_fd, fd)?;
-        thread.close(new_open_fd)?;
+        let new_open_fd = process.open(new_path, flags, Mode::empty())?;
+        process.dup2(new_open_fd, fd)?;
+        process.close(new_open_fd)?;
 
         Ok(())
     }
@@ -143,14 +143,9 @@ impl Drop for FdReplacer {
     #[tracing::instrument(skip(self))]
     fn drop(&mut self) {
         for process in self.processes.iter() {
-            for thread in process.threads() {
-                thread.detach().unwrap_or_else(|err| {
-                    panic!(
-                        "fails to detach thread {}: {}",
-                        thread.tid, err
-                    )
-                });
-            }
+            process
+                .detach()
+                .unwrap_or_else(|err| panic!("fails to detach process {}: {}", process.pid, err));
         }
     }
 }

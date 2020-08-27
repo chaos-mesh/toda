@@ -19,7 +19,7 @@ pub struct MountInjector {
     fuse_session: Option<BackgroundSession<'static>>,
     mounts: mount::MountsInfo,
     injector_config: Vec<InjectorConfig>,
-    hookfs: Option<Arc<hookfs::HookFs>>
+    hookfs: Option<Arc<hookfs::HookFs>>,
 }
 
 impl MountInjector {

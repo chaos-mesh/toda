@@ -698,7 +698,8 @@ impl AsyncFileSystemImpl for HookFs {
         if let Err(err) = self
             .injector
             .inject(&Method::READDIR, rebuilt_path.as_path())
-            .await {
+            .await
+        {
             reply.error(err.into());
             return;
         }
@@ -1059,14 +1060,8 @@ async fn async_stat(path: &Path) -> Result<stat::FileStat> {
 
 async fn async_chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let path_clone = path.to_path_buf();
-    spawn_blocking(move || {
-        chown(
-            &path_clone,
-            uid.map(Uid::from_raw),
-            gid.map(Gid::from_raw),
-        )
-    })
-    .await??;
+    spawn_blocking(move || chown(&path_clone, uid.map(Uid::from_raw), gid.map(Gid::from_raw)))
+        .await??;
     Ok(())
 }
 

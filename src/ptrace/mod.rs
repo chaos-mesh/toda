@@ -9,69 +9,35 @@ use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::trace;
+use tracing::{trace, info};
 
-use std::fs::read_dir;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct TracedProcess {
-    tids: Vec<i32>,
+    pub pid: i32,
 }
 
 impl TracedProcess {
     pub fn trace(pid: i32) -> Result<TracedProcess> {
-        let mut tids = Vec::new();
+        ptrace::attach(Pid::from_raw(pid))?;
+        info!("trace process: {} successfully", pid);
 
-        let tid_strs = read_dir(format!("/proc/{}/task", pid))?.map(|entry| -> Result<String> {
-            Ok(entry?
-                .path()
-                .file_name()
-                .ok_or(anyhow!("unexpected filename in task"))?
-                .to_str()
-                .ok_or(anyhow!("unexpected non-UTF-8 path in task"))?
-                .to_owned())
-        });
-
-        for tid_str in tid_strs {
-            let tid: i32 = tid_str?.parse()?;
-            let pid = Pid::from_raw(tid);
-
-            // TODO: retry here
-            ptrace::attach(pid)?;
-
-            let _ = wait::waitpid(pid, None)?;
-            // TODO: check wait result
-
-            tids.push(tid);
-        }
-
-        Ok(TracedProcess { tids })
-    }
-
-    pub fn threads(&self) -> Vec<TracedThread> {
-        self.tids
-            .iter()
-            .map(|tid| TracedThread { tid: *tid })
-            .collect()
+        Ok(TracedProcess { pid: pid })
     }
 }
 
-#[derive(Debug)]
-pub struct TracedThread {
-    pub tid: i32,
-}
-
-impl TracedThread {
+impl TracedProcess {
     #[tracing::instrument]
     fn protect(&self) -> Result<ThreadGuard> {
-        let regs = ptrace::getregs(Pid::from_raw(self.tid))?;
+        let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
 
         let rip = regs.rip;
-        let rip_ins = ptrace::read(Pid::from_raw(self.tid), rip as *mut libc::c_void)?;
+        let rip_ins = ptrace::read(Pid::from_raw(self.pid), rip as *mut libc::c_void)?;
 
         let guard = ThreadGuard {
-            tid: self.tid,
+            tid: self.pid,
             regs,
             rip_ins,
         };
@@ -94,7 +60,7 @@ impl TracedThread {
         trace!("run syscall {} {:?}", id, args);
 
         self.with_protect(|thread| -> Result<u64> {
-            let pid = Pid::from_raw(thread.tid);
+            let pid = Pid::from_raw(thread.pid);
 
             let mut regs = ptrace::getregs(pid)?;
             let cur_ins_ptr = regs.rip;
@@ -142,7 +108,8 @@ impl TracedThread {
 
     #[tracing::instrument]
     pub fn detach(&self) -> Result<()> {
-        ptrace::detach(Pid::from_raw(self.tid), None)?;
+        info!("detach process: {}", self.pid);
+        ptrace::detach(Pid::from_raw(self.pid), None)?;
 
         Ok(())
     }
@@ -198,7 +165,7 @@ impl TracedThread {
     pub fn open<P: AsRef<Path>>(&self, path: P, flags: OFlag, mode: Mode) -> Result<u64> {
         // TODO: 4096 is hard coded size. Replace it.
         self.with_mmap(4096, |thread, addr| -> Result<u64> {
-            let pid = Pid::from_raw(thread.tid);
+            let pid = Pid::from_raw(thread.pid);
             let path: &[u8] = path.as_ref().as_os_str().as_bytes();
 
             process_vm_writev(

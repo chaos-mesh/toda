@@ -1,14 +1,14 @@
 use anyhow::Result;
 
+use nix::errno::errno;
 use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
-use nix::errno::errno;
 use nix::sys::stat;
 
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use tracing::{info, error};
+use tracing::{error, info};
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);
@@ -27,13 +27,14 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
     let args = Box::new((f, &ret_ptr, Box::new(pid)));
 
     extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
-        let args =
-            unsafe { Box::from_raw(args as *mut (Box<F>, &AtomicPtr<Option<Result<R>>>, Box<i32>)) };
+        let args = unsafe {
+            Box::from_raw(args as *mut (Box<F>, &AtomicPtr<Option<Result<R>>>, Box<i32>))
+        };
         let (f, ret_ptr, pid) = *args;
 
         if let Err(err) = enter_mnt_namespace(*pid) {
             let ret = Box::new(Some(Err(err)));
-            ret_ptr.store(Box::leak(ret) , Ordering::SeqCst)
+            ret_ptr.store(Box::leak(ret), Ordering::SeqCst)
         }
 
         let ret = Box::new(Some(f()));
@@ -49,8 +50,8 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
 
     setns(pid_ns, CloneFlags::CLONE_NEWPID)?;
 
-    let clone_flags = libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SYSVSEM
-    | libc::CLONE_SIGHAND ;
+    let clone_flags =
+        libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SYSVSEM | libc::CLONE_SIGHAND;
 
     let pid = unsafe {
         libc::clone(
@@ -71,7 +72,7 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
                 }
                 info!("clone returned {}", pid);
 
-                return ret
+                return ret;
             }
         }
     }

@@ -8,7 +8,7 @@ use bitflags::bitflags;
 use glob::{MatchOptions, Pattern};
 use rand::Rng;
 
-use tracing::{trace, info};
+use tracing::{info, trace};
 
 bitflags! {
     pub struct Method: u32 {
@@ -133,7 +133,6 @@ impl Filter {
         trace!("method filter: {}", match_method);
         trace!("probability: {}", match_probability);
 
-        match_path && match_method
-            && match_probability
+        match_path && match_method && match_probability
     }
 }

@@ -103,7 +103,7 @@ impl Injector for AttrOverrideInjector {
             }
             _ => {
                 info!("reply without attributes");
-            },
+            }
         }
         Ok(())
     }
