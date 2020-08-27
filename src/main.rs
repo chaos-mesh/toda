@@ -21,11 +21,11 @@ use mount_injector::MountInjector;
 use anyhow::Result;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::mman::{MlockAllFlags, mlockall};
-use signal_hook::iterator::Signals;
+use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
 use tracing::{info, Level};
 
-
+use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -104,13 +104,26 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
-    let mut signal_iter = signals.forever();
+static mut SIGNAL_PIPE_WRITER: RawFd = 0;
 
+const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
+
+extern fn signal_handler(_: libc::c_int) {
+    unsafe {
+        write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
+    }
+}
+
+fn main() -> Result<()> {
     mlockall(MlockAllFlags::MCL_CURRENT)?;
+
+    let (reader, writer) = pipe()?;
+    unsafe {SIGNAL_PIPE_WRITER = writer;}
+
     // ignore dying children
     unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
+    unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
+    unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
     let verbose = Level::from_str(&option.verbose)?;
@@ -120,7 +133,8 @@ fn main() -> Result<()> {
     let mount_injector = inject(option.clone())?;
 
     info!("waiting for signal to exit");
-    signal_iter.next();
+    let mut buf = vec![0u8; 6];
+    read(reader, buf.as_mut_slice())?;
     info!("start to recover and exit");
 
     resume(option, mount_injector)?;
