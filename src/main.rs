@@ -105,6 +105,8 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
+
     mlockall(MlockAllFlags::MCL_CURRENT)?;
     // ignore dying children
     unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
@@ -116,7 +118,6 @@ fn main() -> Result<()> {
 
     let mount_injector = inject(option.clone())?;
 
-    let signals = Signals::new(&[signal_hook::SIGTERM, signal_hook::SIGINT])?;
     info!("waiting for signal to exit");
     signals.forever().next();
     info!("start to recover and exit");
