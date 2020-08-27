@@ -51,7 +51,7 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
     setns(pid_ns, CloneFlags::CLONE_NEWPID)?;
 
     let clone_flags =
-        libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SYSVSEM | libc::CLONE_SIGHAND;
+        libc::CLONE_VM | libc::CLONE_FILES | libc::CLONE_SIGHAND;
 
     let pid = unsafe {
         libc::clone(

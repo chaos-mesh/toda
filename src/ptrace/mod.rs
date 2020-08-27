@@ -21,10 +21,16 @@ pub struct TracedProcess {
 
 impl TracedProcess {
     pub fn trace(pid: i32) -> Result<TracedProcess> {
-        ptrace::attach(Pid::from_raw(pid))?;
+        let raw_pid = pid;
+        let pid = Pid::from_raw(pid);
+
+        ptrace::attach(pid)?;
         info!("trace process: {} successfully", pid);
 
-        Ok(TracedProcess { pid: pid })
+        // TODO: check wait result
+        let _ = wait::waitpid(pid, None)?;
+
+        Ok(TracedProcess { pid: raw_pid })
     }
 }
 
