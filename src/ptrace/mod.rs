@@ -91,6 +91,7 @@ impl TracedProcess {
                     return Err(anyhow!("too many arguments for a syscall"));
                 }
             }
+            trace!("setting regs for pid: {:?}, regs: {:?}", pid, regs);
             ptrace::setregs(pid, regs)?;
 
             // We only support x86-64 platform now, so using hard coded `LittleEndian` here is ok.
