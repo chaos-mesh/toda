@@ -61,15 +61,15 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
             Box::into_raw(args) as *mut libc::c_void,
         )
     };
+    if pid == -1 {
+        error!("clone returned with error: {:?}", errno());
+        panic!();
+    }
 
     loop {
         let ret = ret_ptr.load(Ordering::SeqCst);
         unsafe {
             if let Some(ret) = (&mut *ret).take() {
-                if pid == -1 {
-                    error!("clone returned with error: {:?}", errno());
-                    panic!();
-                }
                 info!("clone returned {}", pid);
 
                 return ret;

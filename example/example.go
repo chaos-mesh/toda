@@ -27,13 +27,21 @@ func main() {
 		return
 	}
 
-	f, err := os.Open("/mnt/test/test")
-	if err != nil {
-		fmt.Printf("Error: %v+", err)
-		return
+	var fVec []*os.File
+
+	for i := 0; i < 500; i++ {
+		f, err := os.Open("/mnt/test/test")
+		if err != nil {
+			fmt.Printf("Error: %v+", err)
+			return
+		}
+
+		fVec = append(fVec, f)
 	}
 
-	for {
+	for i := 0; ; i++ {
+		f := fVec[i%500]
+
 		time.Sleep(time.Second)
 
 		buf := make([]byte, 5)
