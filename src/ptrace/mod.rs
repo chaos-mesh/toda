@@ -108,6 +108,8 @@ impl TracedProcess {
 
             let regs = ptrace::getregs(pid)?;
 
+            trace!("returned: {:?}", regs.rax);
+
             Ok(regs.rax)
         })
     }
