@@ -187,6 +187,7 @@ impl TracedProcess {
                 }],
             )?;
 
+            trace!("running open with flags: {:?}({:?}), mode: {:?}({:?})", flags,flags.bits(),  mode, mode.bits());
             let ret = self.syscall(2, &[addr, flags.bits() as u64, mode.bits() as u64])?;
 
             Ok(ret)
