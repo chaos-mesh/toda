@@ -40,6 +40,7 @@ impl TracedProcess {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
 
         let rip = regs.rip;
+        trace!("protecting regs: {:?}", regs);
         let rip_ins = ptrace::read(Pid::from_raw(self.pid), rip as *mut libc::c_void)?;
 
         let guard = ThreadGuard {
