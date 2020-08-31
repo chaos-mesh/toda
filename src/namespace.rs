@@ -67,6 +67,10 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
     }
 
     loop {
+        // FIXME: if the cloned process exited/crashed, this process can never resume
+        // A possible solution is to wait this process and load the atomic ptr. If this 
+        // pointer returns None, then we can return an error (or pack the return value with
+        // Option<Result<R>>)
         let ret = ret_ptr.load(Ordering::SeqCst);
         unsafe {
             if let Some(ret) = (&mut *ret).take() {
