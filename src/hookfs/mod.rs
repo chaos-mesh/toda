@@ -22,8 +22,7 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fchown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
-    LinkatFlags, Uid, close
+    chown, fchown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid, LinkatFlags,
 };
 
 use tokio::fs;
@@ -835,7 +834,8 @@ impl AsyncFileSystemImpl for HookFs {
             let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let value_ptr = &value[0] as *const u8 as *const libc::c_void;
-            let ret = unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
+            let ret =
+                unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
 
             if ret == -1 {
                 return Err(Error::last());
@@ -946,7 +946,7 @@ impl AsyncFileSystemImpl for HookFs {
             Ok(())
         })
         .await??;
-        
+
         Ok(())
     }
     #[tracing::instrument]
@@ -1133,8 +1133,6 @@ async fn async_rmdir(path: CString) -> Result<i32> {
 
 async fn async_open(path: &Path, filtered_flags: OFlag, mode: stat::Mode) -> Result<RawFd> {
     let path_clone = path.to_path_buf();
-    let fd = spawn_blocking(move || {
-        open(&path_clone, filtered_flags, mode)
-    }).await??;
+    let fd = spawn_blocking(move || open(&path_clone, filtered_flags, mode)).await??;
     Ok(fd)
 }
