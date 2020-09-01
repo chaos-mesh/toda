@@ -1,18 +1,11 @@
 use anyhow::{anyhow, Result};
-use nix::fcntl::FcntlArg;
-use nix::fcntl::FcntlArg::*;
-use nix::fcntl::OFlag;
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
-use nix::sys::stat::Mode;
-use nix::sys::uio::{process_vm_writev, process_vm_readv, IoVec, RemoteIoVec};
+use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{trace, info};
-
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use tracing::{info, trace};
 
 #[derive(Debug)]
 pub struct TracedProcess {
@@ -171,22 +164,23 @@ impl TracedProcess {
     pub fn read_mem(&self, addr: u64, len: u64) -> Result<Vec<u8>> {
         let pid = Pid::from_raw(self.pid);
         let mut ret = Vec::new();
-        
-        process_vm_readv(pid,
+
+        process_vm_readv(
+            pid,
             &[IoVec::from_mut_slice(ret.as_mut_slice())],
             &[RemoteIoVec {
                 base: addr as usize,
                 len: len as usize,
-            }]
+            }],
         )?;
-        
+
         Ok(ret)
     }
 
     #[tracing::instrument(skip(codes))]
     pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {
         let pid = Pid::from_raw(self.pid);
-        
+
         let regs = ptrace::getregs(pid)?;
         let (_, ins) = codes(regs.rip)?; // generate codes to get length
 
@@ -194,10 +188,10 @@ impl TracedProcess {
             self.with_protect(|_| {
                 let (offset, ins) = codes(addr)?; // generate codes
 
-                let end_addr = addr+ins.len() as u64;
+                let end_addr = addr + ins.len() as u64;
                 trace!("write instructions to addr: {:X}-{:X}", addr, end_addr);
                 self.write_mem(addr, &ins)?;
-            
+
                 let mut regs = ptrace::getregs(pid)?;
                 trace!("modify rip to addr: {:X}", addr + offset);
                 regs.rip = addr + offset;
@@ -217,11 +211,9 @@ impl TracedProcess {
                             let regs = ptrace::getregs(pid)?;
                             info!("current rip: {:X}", regs.rip);
 
-                            break
+                            break;
                         }
-                        _ => {
-                            info!("continue running replacers")
-                        }
+                        _ => info!("continue running replacers"),
                     }
                 }
                 Ok(())

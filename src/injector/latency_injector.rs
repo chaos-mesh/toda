@@ -9,7 +9,7 @@ use super::Injector;
 use crate::hookfs::Result;
 
 use tokio::time::delay_for;
-use tracing::{info, trace};
+use tracing::{info, debug, trace};
 
 #[derive(Debug)]
 pub struct LatencyInjector {
@@ -23,9 +23,9 @@ impl Injector for LatencyInjector {
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         trace!("test for filter");
         if self.filter.filter(method, path) {
-            info!("inject io delay {:?}", self.latency);
+            debug!("inject io delay {:?}", self.latency);
             delay_for(self.latency).await;
-            info!("latency finished");
+            debug!("latency finished");
         }
 
         return Ok(());

@@ -2,15 +2,15 @@ use crate::ptrace;
 
 use std::fs::read_dir;
 use std::fs::read_link;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use std::io::{Cursor, Write, Read};
-use std::{fmt::Debug, collections::HashMap};
+use std::{collections::HashMap, fmt::Debug};
 
 use anyhow::{anyhow, Result};
 
-use dynasmrt::{dynasm, DynasmLabelApi, DynasmApi};
+use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
-use tracing::{info, warn, trace};
+use tracing::{info, trace, warn};
 
 #[derive(Clone, Copy)]
 #[repr(packed)]
@@ -22,7 +22,7 @@ struct ReplaceCase {
 
 impl ReplaceCase {
     pub fn new(fd: u64, new_path_offset: u64) -> ReplaceCase {
-        return ReplaceCase {
+        ReplaceCase {
             fd,
             new_path_offset,
         }
@@ -63,15 +63,13 @@ impl ProcessAccesser {
             .ok_or(anyhow!("fd contains non-UTF-8 character"))?
             .as_bytes()
             .to_vec();
-        
+
         new_path.push(0);
 
         let offset = self.new_paths.position();
         self.new_paths.write_all(new_path.as_slice())?;
 
-        self.cases.push(
-            ReplaceCase::new(fd, offset)
-        );
+        self.cases.push(ReplaceCase::new(fd, offset));
 
         Ok(())
     }
@@ -85,10 +83,11 @@ impl ProcessAccesser {
 
         let (cases_ptr, length, _) = self.cases.clone().into_raw_parts();
         let size = length * std::mem::size_of::<ReplaceCase>();
-        let cases = unsafe {std::slice::from_raw_parts(cases_ptr as *mut u8, size)};
+        let cases = unsafe { std::slice::from_raw_parts(cases_ptr as *mut u8, size) };
 
         self.process.run_codes(|addr| {
-            let mut vec_rt = dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(addr as usize);
+            let mut vec_rt =
+                dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(addr as usize);
             dynasm!(vec_rt
                 ; .arch x64
                 ; ->cases:
@@ -221,13 +220,10 @@ impl FdReplacer {
                 let path = entry.path();
                 if let Ok(path) = read_link(&path) {
                     if path.starts_with(detect_path.as_ref()) {
-                        
-                        let process = processes
-                            .entry(pid)
-                            .or_insert_with(|| {
-                                // TODO: handle error here
-                                ProcessAccesser::prepare(pid).unwrap()
-                            });
+                        let process = processes.entry(pid).or_insert_with(|| {
+                            // TODO: handle error here
+                            ProcessAccesser::prepare(pid).unwrap()
+                        });
 
                         let stripped_path = path.strip_prefix(&detect_path)?;
                         process.push_case(fd, new_path.as_ref().join(stripped_path))?;
@@ -236,15 +232,11 @@ impl FdReplacer {
             }
         }
 
-        Ok(FdReplacer { 
-            processes,
-        })
+        Ok(FdReplacer { processes })
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn reopen(
-        &mut self
-    ) -> Result<()> {
+    pub fn reopen(&mut self) -> Result<()> {
         for (_, accesser) in self.processes.drain() {
             accesser.run()?;
         }
@@ -256,6 +248,8 @@ impl FdReplacer {
 impl Drop for ProcessAccesser {
     #[tracing::instrument(skip(self))]
     fn drop(&mut self) {
-        self.process.detach().unwrap_or_else(|err| panic!("fails to detach process {}: {}", self.process.pid, err))
+        self.process
+            .detach()
+            .unwrap_or_else(|err| panic!("fails to detach process {}: {}", self.process.pid, err))
     }
 }

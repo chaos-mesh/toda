@@ -7,7 +7,7 @@ use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
 use fuse::{FileAttr, FileType};
 use time::Timespec;
-use tracing::{info, trace};
+use tracing::{info, debug, trace};
 
 use std::path::Path;
 
@@ -93,7 +93,7 @@ impl Injector for AttrOverrideInjector {
             return Ok(());
         }
 
-        info!("overriding attributes");
+        debug!("overriding attributes");
         match reply {
             Reply::Entry(entry) => {
                 self.inject_attr(&mut entry.stat);
@@ -102,7 +102,7 @@ impl Injector for AttrOverrideInjector {
                 self.inject_attr(&mut attr.attr);
             }
             _ => {
-                info!("reply without attributes");
+                debug!("reply without attributes");
             }
         }
         Ok(())
@@ -112,7 +112,7 @@ impl Injector for AttrOverrideInjector {
 impl AttrOverrideInjector {
     #[tracing::instrument]
     pub fn build(conf: AttrOverrideConfig) -> anyhow::Result<Self> {
-        info!("build attr override injector");
+        debug!("build attr override injector");
 
         let methods = vec![
             String::from("getattr"),

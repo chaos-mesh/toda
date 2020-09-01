@@ -7,7 +7,7 @@ use crate::hookfs::{Error, Result};
 use async_trait::async_trait;
 use nix::errno::Errno;
 use rand::Rng;
-use tracing::{info, trace};
+use tracing::{info, debug, trace};
 
 use std::path::Path;
 
@@ -24,9 +24,9 @@ pub struct FaultInjector {
 impl Injector for FaultInjector {
     #[tracing::instrument]
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
-        info!("test filter");
+        debug!("test filter");
         if self.filter.filter(method, path) {
-            info!("inject io fault");
+            debug!("inject io fault");
             let mut rng = rand::thread_rng();
             let attempt: f64 = rng.gen();
             let mut attempt = (attempt * (self.sum as f64)) as i32;
@@ -35,7 +35,7 @@ impl Injector for FaultInjector {
                 attempt -= p;
 
                 if attempt < 0 {
-                    info!("return with error {}", err);
+                    debug!("return with error {}", err);
                     return Err(Error::Sys(*err));
                 }
             }
