@@ -7,7 +7,7 @@ use crate::hookfs::{Error, Result};
 use async_trait::async_trait;
 use nix::errno::Errno;
 use rand::Rng;
-use tracing::{info, debug, trace};
+use tracing::{debug, trace};
 
 use std::path::Path;
 
