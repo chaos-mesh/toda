@@ -6,9 +6,12 @@ use crate::InjectorConfig;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
+
+use nix::mount::umount;
 
 use tracing::info;
 
@@ -114,9 +117,26 @@ impl MountInjector {
     #[tracing::instrument(skip(self))]
     pub fn recover_mount(&mut self) -> Result<()> {
         let injection = self.fuse_session.take().unwrap();
-        drop(injection);
+        let mount_point = injection.mountpoint.clone();
 
-        // TODO: replace the fd back and force remove the mount
+        let mount_successful = Arc::new(AtomicBool::new(false));
+        let recover_thread_mount_successful = mount_successful.clone();
+        std::thread::spawn(move || {
+            drop(injection);
+
+            recover_thread_mount_successful.store(true, Ordering::SeqCst);
+        });
+        
+        while !mount_successful.load(Ordering::SeqCst) {
+            info!("help to umount the mountpoint: {:?}", &mount_point);
+            match umount(&mount_point) {
+                Ok(()) => {}
+                Err(err) => {
+                    info!("umount returns error: {:?}", err)
+                }
+            }
+        }
+
         if self.mounts.non_root(&self.original_path)? {
             // TODO: make the parent mount points private before move mount points
             self.mounts
