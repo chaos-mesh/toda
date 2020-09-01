@@ -98,7 +98,7 @@ impl TracedProcess {
             ptrace::step(pid, None)?;
 
             let status = wait::waitpid(pid, None)?;
-            trace!("wait status: {:?}", status);
+            info!("wait status: {:?}", status);
             // TODO: check wait result
 
             let regs = ptrace::getregs(pid)?;

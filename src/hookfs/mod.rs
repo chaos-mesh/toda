@@ -23,7 +23,7 @@ use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
     chown, fchown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
-    LinkatFlags, Uid,
+    LinkatFlags, Uid, close
 };
 
 use tokio::fs;
@@ -361,10 +361,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("mknod for {:?}", path);
 
-        let ret = async_mknod(path, mode, rdev as u64).await?;
-        if ret == -1 {
-            return Err(Error::last());
-        }
+        async_mknod(path, mode, rdev as u64).await?;
         self.lookup(parent, name).await
     }
 
@@ -413,14 +410,11 @@ impl AsyncFileSystemImpl for HookFs {
         inject!(self, RMDIR, path.as_path());
 
         let path = CString::new(path.as_os_str().as_bytes())?;
+        trace!("removing path: {:?}", path);
 
-        let ret = async_rmdir(path).await?;
+        async_rmdir(path).await?;
 
-        if ret == -1 {
-            Err(Error::last())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
     #[tracing::instrument]
     async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
@@ -627,9 +621,9 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?;
         inject!(self, RELEASE, path);
 
-        // FIXME: implement release
         let mut opened_files = self.opened_files.write().await;
         opened_files.remove(fh as usize);
+
         Ok(())
     }
     #[tracing::instrument]
@@ -776,8 +770,9 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?;
         inject!(self, RELEASEDIR, path);
 
-        // FIXME: please implement releasedir
-        // self.opened_dirs.write().await.delete(fh as usize);
+        let mut opened_dirs = self.opened_dirs.write().await;
+        opened_dirs.remove(fh as usize);
+
         Ok(())
     }
     #[tracing::instrument]
@@ -836,18 +831,18 @@ impl AsyncFileSystemImpl for HookFs {
 
         let name = CString::new(name.as_bytes())?;
 
-        let ret = spawn_blocking(move || {
+        spawn_blocking(move || {
             let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let value_ptr = &value[0] as *const u8 as *const libc::c_void;
-            unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) }
-        })
-        .await?;
+            let ret = unsafe { lsetxattr(path_ptr, name_ptr, value_ptr, value.len(), flags as i32) };
 
-        if ret == -1 {
-            return Err(Error::last());
-        }
-        Ok(())
+            if ret == -1 {
+                return Err(Error::last());
+            }
+            Ok(())
+        })
+        .await?
     }
     #[tracing::instrument]
     async fn getxattr(&self, ino: u64, name: OsString, size: u32) -> Result<Xattr> {
@@ -871,13 +866,13 @@ impl AsyncFileSystemImpl for HookFs {
             let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let buf_ptr = buf_clone.as_slice() as *const [u8] as *mut [u8] as *mut libc::c_void;
 
-            unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) }
+            let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
+            if ret == -1 {
+                return Err(Error::last());
+            }
+            Ok(ret)
         })
-        .await?;
-
-        if ret == -1 {
-            return Err(Error::last());
-        }
+        .await??;
 
         let mut reply = if size == 0 {
             trace!("return with size {}", ret);
@@ -910,13 +905,13 @@ impl AsyncFileSystemImpl for HookFs {
         let ret = spawn_blocking(move || {
             let path_ptr = &cpath.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let buf_ptr = buf_clone.as_slice() as *const [u8] as *mut [u8] as *mut libc::c_char;
-            unsafe { llistxattr(path_ptr, buf_ptr, size as usize) }
+            let ret = unsafe { llistxattr(path_ptr, buf_ptr, size as usize) };
+            if ret == -1 {
+                return Err(Error::last());
+            }
+            Ok(ret)
         })
-        .await?;
-
-        if ret == -1 {
-            return Err(Error::last());
-        }
+        .await??;
 
         let mut reply = if size == 0 {
             Xattr::size(ret as u32)
@@ -940,16 +935,18 @@ impl AsyncFileSystemImpl for HookFs {
 
         let name = CString::new(name.as_bytes())?;
 
-        let ret = spawn_blocking(move || {
+        spawn_blocking(move || {
             let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
             let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
-            unsafe { lremovexattr(path_ptr, name_ptr) }
-        })
-        .await?;
+            let ret = unsafe { lremovexattr(path_ptr, name_ptr) };
 
-        if ret == -1 {
-            return Err(Error::last());
-        }
+            if ret == -1 {
+                return Err(Error::last());
+            }
+            Ok(())
+        })
+        .await??;
+        
         Ok(())
     }
     #[tracing::instrument]
@@ -1097,12 +1094,16 @@ async fn async_readlink(path: &Path) -> Result<OsString> {
 }
 
 async fn async_mknod(path: CString, mode: u32, rdev: u64) -> Result<i32> {
-    let ret = spawn_blocking(move || {
+    spawn_blocking(move || {
         let path_ptr = path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
-        unsafe { libc::mknod(path_ptr, mode, rdev) }
+
+        let ret = unsafe { libc::mknod(path_ptr, mode, rdev) };
+        if ret == -1 {
+            return Err(Error::last());
+        }
+        Ok(ret)
     })
-    .await?;
-    Ok(ret)
+    .await?
 }
 
 async fn async_mkdir(path: &Path, mode: stat::Mode) -> Result<()> {
@@ -1118,16 +1119,22 @@ async fn async_unlink(path: &Path) -> Result<()> {
 }
 
 async fn async_rmdir(path: CString) -> Result<i32> {
-    let ret = spawn_blocking(move || {
-        let path_ptr = path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
-        unsafe { libc::rmdir(path_ptr) }
+    spawn_blocking(move || {
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let ret = unsafe { libc::rmdir(path_ptr) };
+
+        if ret == -1 {
+            return Err(Error::last());
+        }
+        Ok(ret)
     })
-    .await?;
-    Ok(ret)
+    .await?
 }
 
 async fn async_open(path: &Path, filtered_flags: OFlag, mode: stat::Mode) -> Result<RawFd> {
     let path_clone = path.to_path_buf();
-    let fd = spawn_blocking(move || open(&path_clone, filtered_flags, mode)).await??;
+    let fd = spawn_blocking(move || {
+        open(&path_clone, filtered_flags, mode)
+    }).await??;
     Ok(fd)
 }

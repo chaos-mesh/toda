@@ -29,7 +29,7 @@ func main() {
 
 	var fVec []*os.File
 
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 4000; i++ {
 		f, err := os.Open("/mnt/test/test")
 		if err != nil {
 			fmt.Printf("Error: %v+", err)
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	for i := 0; ; i++ {
-		f := fVec[i%500]
+		f := fVec[i%4000]
 
 		time.Sleep(time.Second)
 
