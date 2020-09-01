@@ -3,16 +3,165 @@ use crate::ptrace;
 use std::fs::read_dir;
 use std::fs::read_link;
 use std::path::{Path, PathBuf};
+use std::io::{Cursor, Write, Read};
+use std::{fmt::Debug, collections::HashMap};
 
 use anyhow::{anyhow, Result};
-use nix::fcntl::FcntlArg;
-use nix::fcntl::OFlag;
-use nix::sys::stat::Mode;
 
-use tracing::{info, warn};
+use dynasmrt::{dynasm, DynasmLabelApi, DynasmApi};
+
+use tracing::{info, warn, trace};
+
+#[derive(Clone, Copy)]
+#[repr(packed)]
+#[repr(C)]
+struct ReplaceCase {
+    fd: u64,
+    new_path_offset: u64,
+}
+
+impl ReplaceCase {
+    pub fn new(fd: u64, new_path_offset: u64) -> ReplaceCase {
+        return ReplaceCase {
+            fd,
+            new_path_offset,
+        }
+    }
+}
+
+struct ProcessAccesser {
+    process: ptrace::TracedProcess,
+
+    cases: Vec<ReplaceCase>,
+    new_paths: Cursor<Vec<u8>>,
+}
+
+impl Debug for ProcessAccesser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.process.fmt(f)
+    }
+}
+
+impl ProcessAccesser {
+    pub fn prepare(pid: i32) -> Result<ProcessAccesser> {
+        let process = ptrace::TracedProcess::trace(pid)?;
+
+        Ok(ProcessAccesser {
+            process,
+
+            cases: Vec::new(),
+            new_paths: Cursor::new(Vec::new()),
+        })
+    }
+
+    #[tracing::instrument]
+    pub fn push_case(&mut self, fd: u64, new_path: PathBuf) -> anyhow::Result<()> {
+        info!("push case fd: {}, new_path: {}", fd, new_path.display());
+
+        let mut new_path = new_path
+            .to_str()
+            .ok_or(anyhow!("fd contains non-UTF-8 character"))?
+            .as_bytes()
+            .to_vec();
+        
+        new_path.push(0);
+
+        let offset = self.new_paths.position();
+        self.new_paths.write_all(new_path.as_slice())?;
+
+        self.cases.push(
+            ReplaceCase::new(fd, offset)
+        );
+
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    pub fn run(mut self) -> anyhow::Result<()> {
+        self.new_paths.set_position(0);
+
+        let mut new_paths = Vec::new();
+        self.new_paths.read_to_end(&mut new_paths)?;
+
+        let (cases_ptr, length, _) = self.cases.clone().into_raw_parts();
+        let size = length * std::mem::size_of::<ReplaceCase>();
+        let cases = unsafe {std::slice::from_raw_parts(cases_ptr as *mut u8, size)};
+
+        self.process.run_codes(|addr| {
+            let mut vec_rt = dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(addr as usize);
+            dynasm!(vec_rt
+                ; .arch x64
+                ; ->cases:
+                ; .bytes cases
+                ; ->cases_length:
+                ; .qword cases.len() as i64
+                ; ->new_paths:
+                ; .bytes new_paths.as_slice()
+            );
+
+            trace!("static bytes placed");
+            let replace = vec_rt.offset();
+            dynasm!(vec_rt
+                ; .arch x64
+                // set r15 to 0
+                ; xor r15, r15
+                ; lea r14, [-> cases]
+
+                ; jmp ->end
+                ; ->start:
+                // fcntl
+                ; mov rax, 0x48
+                ; mov rdi, QWORD [r14+r15] // fd
+                ; mov rsi, 0x3
+                ; mov rdx, 0x0
+                ; syscall
+                ; mov rsi, rax
+                // open
+                ; mov rax, 0x2
+                ; lea rdi, [-> new_paths]
+                ; add rdi, QWORD [r14+r15+8] // path
+                ; mov rdx, 0x0
+                ; syscall
+                ; push rax
+                ; mov rdi, rax
+                // dup2
+                ; mov rax, 0x21
+                ; mov rsi, QWORD [r14+r15] // fd
+                ; syscall
+                // close
+                ; mov rax, 0x3
+                ; pop rdi
+                ; syscall
+
+                ; add r15, 0x10
+                ; ->end:
+                ; mov r13, QWORD [->cases_length]
+                ; cmp r15, r13
+                ; jb ->start
+
+                ; int3
+            );
+
+            let instructions = vec_rt.finalize()?;
+            let mut log_file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open("/tmp/code.log")?;
+            log_file.write_all(&instructions[replace.0..])?;
+            trace!("write file to /tmp/code.log");
+
+            Ok((replace.0 as u64, instructions))
+        })?;
+
+        trace!("reopen successfully");
+        Ok(())
+    }
+}
 
 pub struct FdReplacer {
-    processes: Vec<ptrace::TracedProcess>,
+    processes: HashMap<i32, ProcessAccesser>,
 }
 
 pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf)> {
@@ -36,14 +185,17 @@ pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf
 }
 
 impl FdReplacer {
-    #[tracing::instrument(skip(base_path))]
-    pub fn prepare<P: AsRef<Path>>(base_path: P) -> Result<FdReplacer> {
+    #[tracing::instrument(skip(detect_path, new_path))]
+    pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
+        detect_path: P1,
+        new_path: P2,
+    ) -> Result<FdReplacer> {
         let pids = read_dir("/proc")?
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok());
 
-        let mut processes = Vec::new();
-        'pid_loop: for pid in pids {
+        let mut processes = HashMap::new();
+        for pid in pids {
             let entries = match read_dir(format!("/proc/{}/fd", pid)) {
                 Ok(entries) => entries,
                 Err(err) => {
@@ -60,92 +212,50 @@ impl FdReplacer {
                     }
                 };
 
-                let path = entry.path();
-                if let Ok(path) = read_link(&path) {
-                    if path.starts_with(base_path.as_ref()) {
-                        processes.push(ptrace::TracedProcess::trace(pid)?);
-                        
-                        continue 'pid_loop
-                    }
-                }
-            }
-        }
-
-        Ok(FdReplacer { processes })
-    }
-
-    #[tracing::instrument(skip(self, original_path, new_path))]
-    pub fn reopen<P1: AsRef<Path>, P2: AsRef<Path>>(
-        &self,
-        original_path: P1,
-        new_path: P2,
-    ) -> Result<()> {
-        let base_path = original_path.as_ref();
-
-        for process in self.processes.iter() {
-            let tid = process.pid;
-            info!("reopen fd for tid: {}", tid);
-
-            let fd_dir_path = format!("/proc/{}/fd", tid);
-            for fd in read_dir(fd_dir_path)?.into_iter() {
-                let path = fd?.path();
-                let fd = path
+                let fd = entry
                     .file_name()
-                    .ok_or(anyhow!("fd doesn't contain a filename"))?
                     .to_str()
                     .ok_or(anyhow!("fd contains non-UTF-8 character"))?
                     .parse()?;
-                if let Ok(path) = read_link(&path) {
-                    info!("handling path: {:?}", path);
-                    if path.starts_with(base_path) {
-                        info!("reopen file, fd: {:?}, path: {:?}", fd, path.as_path());
 
-                        let base_path = original_path.as_ref();
-                        let striped_path = path.as_path().strip_prefix(base_path)?;
-                        let new_path = new_path.as_ref().join(striped_path);
-                        info!(
-                            "reopen fd: {} for pid {}, from {} to {}",
-                            fd,
-                            process.pid,
-                            path.display(),
-                            new_path.display()
-                        );
-                        self.reopen_file(&process, fd, new_path.as_path())?;
+                let path = entry.path();
+                if let Ok(path) = read_link(&path) {
+                    if path.starts_with(detect_path.as_ref()) {
+                        
+                        let process = processes
+                            .entry(pid)
+                            .or_insert_with(|| {
+                                // TODO: handle error here
+                                ProcessAccesser::prepare(pid).unwrap()
+                            });
+
+                        let stripped_path = path.strip_prefix(&detect_path)?;
+                        process.push_case(fd, new_path.as_ref().join(stripped_path))?;
                     }
                 }
             }
         }
 
-        Ok(())
+        Ok(FdReplacer { 
+            processes,
+        })
     }
 
-    #[tracing::instrument(skip(self, process, new_path))]
-    fn reopen_file<P: AsRef<Path>>(
-        &self,
-        process: &ptrace::TracedProcess,
-        fd: u64,
-        new_path: P,
+    #[tracing::instrument(skip(self))]
+    pub fn reopen(
+        &mut self
     ) -> Result<()> {
-        let flags = process.fcntl(fd, FcntlArg::F_GETFL)?;
-        let flags = OFlag::from_bits_truncate(flags as i32);
-
-        info!("fcntl get flags {:?}", flags);
-
-        let new_open_fd = process.open(new_path, flags, Mode::empty())?;
-        process.dup2(new_open_fd, fd)?;
-        process.close(new_open_fd)?;
+        for (_, accesser) in self.processes.drain() {
+            accesser.run()?;
+        }
 
         Ok(())
     }
 }
 
-impl Drop for FdReplacer {
+impl Drop for ProcessAccesser {
     #[tracing::instrument(skip(self))]
     fn drop(&mut self) {
-        for process in self.processes.iter() {
-            process
-                .detach()
-                .unwrap_or_else(|err| panic!("fails to detach process {}: {}", process.pid, err));
-        }
+        self.process.detach().unwrap_or_else(|err| panic!("fails to detach process {}: {}", self.process.pid, err))
     }
 }

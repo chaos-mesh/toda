@@ -1,5 +1,6 @@
 #![feature(box_syntax)]
 #![feature(async_closure)]
+#![feature(vec_into_raw_parts)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
@@ -51,7 +52,7 @@ fn inject(option: Options) -> Result<MountInjector> {
     let fuse_dev = fuse_device::read_fuse_dev_t()?;
     let mount_injector = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
-            let fdreplacer = FdReplacer::prepare(&path)?;
+            let mut fdreplacer = FdReplacer::prepare(&path, &path)?;
             let mut injection = MountInjector::create_injection(&path, injector_config)?;
 
             if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
@@ -62,8 +63,7 @@ fn inject(option: Options) -> Result<MountInjector> {
 
             // At this time, `mount --move` has already been executed.
             // Our FUSE are mounted on the "path", so we
-            let (new_path, original_path) = encode_path(&path)?;
-            fdreplacer.reopen(original_path.as_path(), new_path.as_path())?;
+            fdreplacer.reopen()?;
             drop(fdreplacer);
 
             Ok(injection)
@@ -84,9 +84,10 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
 
     namespace::with_mnt_pid_namespace(
         box move || -> Result<()> {
-            let fdreplacer = FdReplacer::prepare(&path)?;
-            let (original_path, new_path) = encode_path(path)?;
-            fdreplacer.reopen(original_path, new_path)?;
+            let (_, new_path) = encode_path(&path)?;
+
+            let mut fdreplacer = FdReplacer::prepare(&path, &new_path)?;
+            fdreplacer.reopen()?;
             info!("fdreplacer reopened");
 
             info!("recovering mount");

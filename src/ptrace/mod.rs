@@ -5,7 +5,7 @@ use nix::fcntl::OFlag;
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
 use nix::sys::stat::Mode;
-use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
+use nix::sys::uio::{process_vm_writev, process_vm_readv, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
@@ -125,26 +125,6 @@ impl TracedProcess {
     }
 
     #[tracing::instrument]
-    pub fn dup2(&self, old_fd: u64, new_fd: u64) -> Result<u64> {
-        self.syscall(33, &[old_fd, new_fd])
-    }
-
-    #[tracing::instrument]
-    pub fn close(&self, fd: u64) -> Result<u64> {
-        self.syscall(3, &[fd])
-    }
-
-    #[tracing::instrument]
-    pub fn fcntl(&self, fd: u64, arg: FcntlArg) -> Result<u64> {
-        let (cmd, args) = match arg {
-            F_GETFD => (libc::F_GETFD, 0),
-            F_GETFL => (libc::F_GETFL, 0),
-            _ => unimplemented!(),
-        };
-        self.syscall(72, &[fd, cmd as u64, args as u64])
-    }
-
-    #[tracing::instrument]
     pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {
         let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
@@ -161,7 +141,7 @@ impl TracedProcess {
     }
 
     #[tracing::instrument(skip(f))]
-    fn with_mmap<R, F: Fn(&Self, u64) -> Result<R>>(&self, len: u64, f: F) -> Result<R> {
+    pub fn with_mmap<R, F: Fn(&Self, u64) -> Result<R>>(&self, len: u64, f: F) -> Result<R> {
         let addr = self.mmap(len, 0)?;
 
         let ret = f(self, addr)?;
@@ -171,26 +151,81 @@ impl TracedProcess {
         Ok(ret)
     }
 
-    #[tracing::instrument(skip(path))]
-    pub fn open<P: AsRef<Path>>(&self, path: P, flags: OFlag, mode: Mode) -> Result<u64> {
-        // TODO: 4096 is hard coded size. Replace it.
-        self.with_mmap(4096, |thread, addr| -> Result<u64> {
-            let pid = Pid::from_raw(thread.pid);
-            let path: &[u8] = path.as_ref().as_os_str().as_bytes();
+    #[tracing::instrument]
+    pub fn write_mem(&self, addr: u64, content: &[u8]) -> Result<()> {
+        let pid = Pid::from_raw(self.pid);
 
-            process_vm_writev(
-                pid,
-                &[IoVec::from_slice(path)],
-                &[RemoteIoVec {
-                    base: addr as usize,
-                    len: path.len(),
-                }],
-            )?;
+        process_vm_writev(
+            pid,
+            &[IoVec::from_slice(content)],
+            &[RemoteIoVec {
+                base: addr as usize,
+                len: content.len(),
+            }],
+        )?;
 
-            trace!("running open with flags: {:?}({:?}), mode: {:?}({:?})", flags,flags.bits(),  mode, mode.bits());
-            let ret = self.syscall(2, &[addr, flags.bits() as u64, mode.bits() as u64])?;
+        Ok(())
+    }
 
-            Ok(ret)
+    #[tracing::instrument]
+    pub fn read_mem(&self, addr: u64, len: u64) -> Result<Vec<u8>> {
+        let pid = Pid::from_raw(self.pid);
+        let mut ret = Vec::new();
+        
+        process_vm_readv(pid,
+            &[IoVec::from_mut_slice(ret.as_mut_slice())],
+            &[RemoteIoVec {
+                base: addr as usize,
+                len: len as usize,
+            }]
+        )?;
+        
+        Ok(ret)
+    }
+
+    #[tracing::instrument(skip(codes))]
+    pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {
+        let pid = Pid::from_raw(self.pid);
+        
+        let regs = ptrace::getregs(pid)?;
+        let (_, ins) = codes(regs.rip)?; // generate codes to get length
+
+        self.with_mmap(ins.len() as u64 + 16, |_, addr| {
+            self.with_protect(|_| {
+                let (offset, ins) = codes(addr)?; // generate codes
+
+                let end_addr = addr+ins.len() as u64;
+                trace!("write instructions to addr: {:X}-{:X}", addr, end_addr);
+                self.write_mem(addr, &ins)?;
+            
+                let mut regs = ptrace::getregs(pid)?;
+                trace!("modify rip to addr: {:X}", addr + offset);
+                regs.rip = addr + offset;
+                ptrace::setregs(pid, regs)?;
+
+                loop {
+                    info!("run instructions");
+                    ptrace::cont(pid, None)?;
+
+                    info!("wait for pid: {:?}", pid);
+                    let status = wait::waitpid(pid, None)?;
+                    info!("wait status: {:?}", status);
+
+                    use nix::sys::signal::SIGTRAP;
+                    match status {
+                        wait::WaitStatus::Stopped(_, SIGTRAP) => {
+                            let regs = ptrace::getregs(pid)?;
+                            info!("current rip: {:X}", regs.rip);
+
+                            break
+                        }
+                        _ => {
+                            info!("continue running replacers")
+                        }
+                    }
+                }
+                Ok(())
+            })
         })
     }
 }
