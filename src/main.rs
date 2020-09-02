@@ -7,6 +7,7 @@
 extern crate derive_more;
 
 mod fd_replacer;
+mod cwd_replacer;
 mod fuse_device;
 mod hookfs;
 mod injector;
@@ -14,8 +15,11 @@ mod mount;
 mod mount_injector;
 mod namespace;
 mod ptrace;
+mod utils;
 
-use fd_replacer::{encode_path, FdReplacer};
+use fd_replacer::FdReplacer;
+use cwd_replacer::CwdReplacer;
+use utils::encode_path;
 use injector::InjectorConfig;
 use mount_injector::MountInjector;
 
@@ -53,6 +57,7 @@ fn inject(option: Options) -> Result<MountInjector> {
     let mount_injector = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
             let mut fdreplacer = FdReplacer::prepare(&path, &path)?;
+            let mut cwdreplacer = CwdReplacer::prepare(&path, &path)?;
             let mut injection = MountInjector::create_injection(&path, injector_config)?;
 
             if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
@@ -63,8 +68,13 @@ fn inject(option: Options) -> Result<MountInjector> {
 
             // At this time, `mount --move` has already been executed.
             // Our FUSE are mounted on the "path", so we
-            fdreplacer.reopen()?;
+            fdreplacer.run()?;
             drop(fdreplacer);
+            info!("fdreplacer detached");
+
+            cwdreplacer.run()?;
+            drop(cwdreplacer);
+            info!("cwdreplacer detached");
 
             Ok(injection)
         },
@@ -87,7 +97,9 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
             let (_, new_path) = encode_path(&path)?;
 
             let mut fdreplacer = FdReplacer::prepare(&path, &new_path)?;
-            fdreplacer.reopen()?;
+            let mut cwdreplacer = CwdReplacer::prepare(&path, &new_path)?;
+            fdreplacer.run()?;
+            cwdreplacer.run()?;
             info!("fdreplacer reopened");
 
             info!("recovering mount");
@@ -95,7 +107,9 @@ fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
             mount_injector.recover_mount()?;
 
             drop(fdreplacer);
-            info!("fdreplace detached");
+            info!("fdreplacer detached");
+            drop(cwdreplacer);
+            info!("cwdreplacer detached");
             info!("recover successfully");
             Ok(())
         },

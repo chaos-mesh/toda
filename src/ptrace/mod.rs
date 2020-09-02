@@ -7,23 +7,43 @@ use nix::unistd::Pid;
 
 use tracing::{info, trace};
 
+use std::collections::HashMap;
+use std::cell::RefCell;
+use std::path::Path;
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
+
+thread_local! {
+    static TRACED_PROCESS: RefCell<HashMap<i32, i32>> = RefCell::new(HashMap::new())
+}
+
 #[derive(Debug)]
 pub struct TracedProcess {
     pub pid: i32,
 }
 
 impl TracedProcess {
+    #[tracing::instrument]
     pub fn trace(pid: i32) -> Result<TracedProcess> {
-        let raw_pid = pid;
-        let pid = Pid::from_raw(pid);
+        TRACED_PROCESS.with(|set| {
+            let raw_pid = pid;
+            let pid = Pid::from_raw(pid);
 
-        ptrace::attach(pid)?;
-        info!("trace process: {} successfully", pid);
-
-        // TODO: check wait result
-        let _ = wait::waitpid(pid, None)?;
-
-        Ok(TracedProcess { pid: raw_pid })
+            let mut set_ref = set.borrow_mut();
+            match set_ref.get_mut(&raw_pid) {
+                Some(count) => *count += 1,
+                None => {
+                    ptrace::attach(pid)?;
+                    info!("trace process: {} successfully", pid);
+                    set_ref.insert(raw_pid, 1);
+            
+                    // TODO: check wait result
+                    let status = wait::waitpid(pid, None)?;
+                    info!("wait status: {:?}", status);
+                }
+            }
+            Ok(TracedProcess { pid: raw_pid })
+        })
     }
 }
 
@@ -111,10 +131,26 @@ impl TracedProcess {
 
     #[tracing::instrument]
     pub fn detach(&self) -> Result<()> {
-        info!("detach process: {}", self.pid);
-        ptrace::detach(Pid::from_raw(self.pid), None)?;
+        TRACED_PROCESS.with(|set| {
+            let mut set_ref = set.borrow_mut();
+            match set_ref.get_mut(&self.pid) {
+                Some(count) => {
+                    *count -= 1;
+                    info!("decrease counter to {}", *count);
+                    if *count < 1 {
+                        set_ref.remove(&self.pid);
 
-        Ok(())
+                        info!("detach process: {}", self.pid);
+                        ptrace::detach(Pid::from_raw(self.pid), None)?;
+                    }
+                },
+                None => {
+                    return Err(anyhow::anyhow!("haven't traced this process"))
+                }
+            }
+
+            Ok(())
+        })
     }
 
     #[tracing::instrument]
@@ -142,6 +178,22 @@ impl TracedProcess {
         self.munmap(addr, len)?;
 
         Ok(ret)
+    }
+
+    #[tracing::instrument(skip(filename))]
+    pub fn chdir<P: AsRef<Path>>(&self, filename: P) -> Result<()> {
+        let filename = CString::new(filename.as_ref().as_os_str().as_bytes())?;
+        let path = filename.as_bytes_with_nul();
+        
+        self.with_mmap(path.len() as u64, |process, addr| {
+            process.write_mem(addr, path)?;
+
+            self.syscall(
+                80, 
+            &[addr],
+            )?;
+            Ok(())
+        })
     }
 
     #[tracing::instrument]
