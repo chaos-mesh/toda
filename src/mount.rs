@@ -1,13 +1,12 @@
 use std::fs::create_dir_all;
 
-
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
 use nix::mount::{mount, MsFlags};
 
-use procfs::process::{Process, self};
+use procfs::process::{self, Process};
 
 #[derive(Debug)]
 pub struct MountsInfo {
@@ -23,7 +22,7 @@ impl MountsInfo {
     }
 
     pub fn non_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
-        let mount_points= self.mounts.iter().map(|item| &item.mount_point);
+        let mount_points = self.mounts.iter().map(|item| &item.mount_point);
         for mount_point in mount_points {
             if path.as_ref().starts_with(&mount_point) {
                 // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still

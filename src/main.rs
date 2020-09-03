@@ -6,7 +6,6 @@
 
 extern crate derive_more;
 
-mod replacer;
 mod fuse_device;
 mod hookfs;
 mod injector;
@@ -14,12 +13,13 @@ mod mount;
 mod mount_injector;
 mod namespace;
 mod ptrace;
+mod replacer;
 mod utils;
 
-use replacer::{UnionReplacer, Replacer};
-use utils::encode_path;
 use injector::InjectorConfig;
 use mount_injector::MountInjector;
+use replacer::{Replacer, UnionReplacer};
+use utils::encode_path;
 
 use anyhow::Result;
 use nix::sys::mman::{mlockall, MlockAllFlags};

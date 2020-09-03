@@ -1,8 +1,6 @@
-
-
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf)> {
     let original_path: PathBuf = original_path.as_ref().to_owned();
