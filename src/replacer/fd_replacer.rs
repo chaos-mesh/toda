@@ -1,17 +1,21 @@
 use crate::ptrace;
-use crate::utils;
 
-use std::fs::read_dir;
-use std::fs::read_link;
+use super::Replacer;
+
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, fmt::Debug};
+use std::iter::FromIterator;
 
 use anyhow::{anyhow, Result};
 
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
-use tracing::{info, trace, warn};
+use tracing::{info, trace, error};
+
+use procfs::process::{all_processes, FDTarget};
+
+use itertools::Itertools;
 
 #[derive(Clone, Copy)]
 #[repr(packed)]
@@ -30,32 +34,31 @@ impl ReplaceCase {
     }
 }
 
-struct ProcessAccesser {
-    process: ptrace::TracedProcess,
-
+struct ProcessAccessorBuilder {
     cases: Vec<ReplaceCase>,
     new_paths: Cursor<Vec<u8>>,
 }
 
-impl Debug for ProcessAccesser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.process.fmt(f)
-    }
-}
-
-impl ProcessAccesser {
-    pub fn prepare(pid: i32) -> Result<ProcessAccesser> {
-        let process = ptrace::TracedProcess::trace(pid)?;
-
-        Ok(ProcessAccesser {
-            process,
-
+impl ProcessAccessorBuilder {
+    pub fn new() -> ProcessAccessorBuilder {
+        ProcessAccessorBuilder {
             cases: Vec::new(),
             new_paths: Cursor::new(Vec::new()),
+        }
+    }
+
+    pub fn build(self, pid: i32) -> Result<ProcessAccessor> {
+        let process = ptrace::TracedProcess::trace(pid)?;
+
+        Ok(ProcessAccessor {
+            process,
+
+            cases: self.cases,
+            new_paths: self.new_paths,
         })
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn push_case(&mut self, fd: u64, new_path: PathBuf) -> anyhow::Result<()> {
         info!("push case fd: {}, new_path: {}", fd, new_path.display());
 
@@ -74,7 +77,35 @@ impl ProcessAccesser {
 
         Ok(())
     }
+}
 
+impl FromIterator<(u64, PathBuf)> for ProcessAccessorBuilder {
+    fn from_iter<T: IntoIterator<Item = (u64, PathBuf)>>(iter: T) -> Self {
+        let mut builder = Self::new();
+        for (fd, path) in iter {
+            if let Err(err) = builder.push_case(fd, path) {
+                error!("fail to write to AccessorBuilder. Error: {:?}", err)
+            }
+        }
+
+        builder
+    }
+} 
+
+struct ProcessAccessor {
+    process: ptrace::TracedProcess,
+
+    cases: Vec<ReplaceCase>,
+    new_paths: Cursor<Vec<u8>>,
+}
+
+impl Debug for ProcessAccessor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.process.fmt(f)
+    }
+}
+
+impl ProcessAccessor {
     #[tracing::instrument]
     pub fn run(mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
@@ -161,7 +192,7 @@ impl ProcessAccesser {
 }
 
 pub struct FdReplacer {
-    processes: HashMap<i32, ProcessAccesser>,
+    processes: HashMap<i32, ProcessAccessor>,
 }
 
 impl FdReplacer {
@@ -170,65 +201,54 @@ impl FdReplacer {
         detect_path: P1,
         new_path: P2,
     ) -> Result<FdReplacer> {
-        let pids = utils::iter_pids()?;
+        info!("preparing fd replacer");
 
-        let mut processes = HashMap::new();
-        for pid in pids {
-            let entries = match read_dir(format!("/proc/{}/fd", pid)) {
-                Ok(entries) => entries,
-                Err(err) => {
-                    warn!("fail to read /proc/{}/fd: {:?}", pid, err);
-                    continue;
+        let detect_path = detect_path.as_ref();
+        let new_path = new_path.as_ref();
+
+        let processes = all_processes()?.into_iter().filter_map(|process| -> Option<_> {
+            let pid = process.pid;
+
+            let fd = process.fd().ok()?;
+
+            Some((pid, fd))
+        }).flat_map(|(pid, fd)| {
+            fd.into_iter()
+            .filter_map(|entry| {
+                match entry.target {
+                    FDTarget::Path(path) => Some((entry.fd as u64, path)),
+                    _ => None
                 }
-            };
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(err) => {
-                        warn!("fail to read entry {:?}", err);
-                        continue;
-                    }
-                };
-
-                let fd = entry
-                    .file_name()
-                    .to_str()
-                    .ok_or(anyhow!("fd contains non-UTF-8 character"))?
-                    .parse()?;
-
-                let path = entry.path();
-                if let Ok(path) = read_link(&path) {
-                    if path.starts_with(detect_path.as_ref()) {
-                        let process = processes.entry(pid).or_insert_with(|| {
-                            // TODO: handle error here
-                            ProcessAccesser::prepare(pid).unwrap()
-                        });
-
-                        let stripped_path = path.strip_prefix(&detect_path)?;
-                        process.push_case(fd, new_path.as_ref().join(stripped_path))?;
-                    }
+            })
+            .filter(|(_, path)| path.starts_with(detect_path))
+            .filter_map(move |(fd, path)| {
+                let stripped_path = path.strip_prefix(&detect_path).ok()?;
+                return Some((pid, (fd, new_path.join(stripped_path))));
+            })
+        }).group_by(|(pid, _)| *pid).into_iter()
+        .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
+        .filter_map(|(pid, group)| {
+            match group.collect::<ProcessAccessorBuilder>().build(pid) {
+                Ok(accessor) => Some((pid, accessor)),
+                Err(err) => {
+                    error!("fail to build accessor: {:?}", err);
+                    None
                 }
             }
-        }
+        }).collect();
 
         Ok(FdReplacer { processes })
     }
+}
 
+impl Replacer for FdReplacer {
     #[tracing::instrument(skip(self))]
-    pub fn run(&mut self) -> Result<()> {
-        for (_, accesser) in self.processes.drain() {
-            accesser.run()?;
+    fn run(&mut self) -> Result<()> {
+        info!("running fd replacer");
+        for (_, accessor) in self.processes.drain() {
+            accessor.run()?;
         }
 
         Ok(())
-    }
-}
-
-impl Drop for ProcessAccesser {
-    #[tracing::instrument(skip(self))]
-    fn drop(&mut self) {
-        self.process
-            .detach()
-            .unwrap_or_else(|err| panic!("fails to detach process {}: {}", self.process.pid, err))
     }
 }

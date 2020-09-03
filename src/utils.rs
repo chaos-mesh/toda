@@ -4,12 +4,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
-pub fn iter_pids() -> Result<impl Iterator<Item=i32>> {
-    Ok(read_dir("/proc")?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok()))
-}
-
 pub fn encode_path<P: AsRef<Path>>(original_path: P) -> Result<(PathBuf, PathBuf)> {
     let original_path: PathBuf = original_path.as_ref().to_owned();
 

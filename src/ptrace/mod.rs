@@ -5,7 +5,7 @@ use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{info, trace};
+use tracing::{info, trace, error};
 
 use std::collections::HashMap;
 use std::cell::RefCell;
@@ -130,30 +130,6 @@ impl TracedProcess {
     }
 
     #[tracing::instrument]
-    pub fn detach(&self) -> Result<()> {
-        TRACED_PROCESS.with(|set| {
-            let mut set_ref = set.borrow_mut();
-            match set_ref.get_mut(&self.pid) {
-                Some(count) => {
-                    *count -= 1;
-                    info!("decrease counter to {}", *count);
-                    if *count < 1 {
-                        set_ref.remove(&self.pid);
-
-                        info!("detach process: {}", self.pid);
-                        ptrace::detach(Pid::from_raw(self.pid), None)?;
-                    }
-                },
-                None => {
-                    return Err(anyhow::anyhow!("haven't traced this process"))
-                }
-            }
-
-            Ok(())
-        })
-    }
-
-    #[tracing::instrument]
     pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {
         let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
@@ -271,6 +247,35 @@ impl TracedProcess {
                 Ok(())
             })
         })
+    }
+}
+
+impl Drop for TracedProcess {
+    #[tracing::instrument]
+    fn drop(&mut self) {
+        info!("dropping traced process: {}", self.pid);
+        if let Err(err) = TRACED_PROCESS.with(|set| {
+            let mut set_ref = set.borrow_mut();
+            match set_ref.get_mut(&self.pid) {
+                Some(count) => {
+                    *count -= 1;
+                    info!("decrease counter to {}", *count);
+                    if *count < 1 {
+                        set_ref.remove(&self.pid);
+
+                        info!("detach process: {}", self.pid);
+                        ptrace::detach(Pid::from_raw(self.pid), None)?;
+                    }
+
+                    Ok(())
+                },
+                None => {
+                    Err(anyhow::anyhow!("haven't traced this process"))
+                }
+            }
+        }) {
+            error!("error while droping process: {:?}", err)
+        }
     }
 }
 

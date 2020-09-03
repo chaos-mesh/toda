@@ -7,33 +7,25 @@ use anyhow::{anyhow, Context, Result};
 
 use nix::mount::{mount, MsFlags};
 
+use procfs::process::{Process, self};
+
 #[derive(Debug)]
 pub struct MountsInfo {
-    mounts: Vec<String>,
+    mounts: Vec<process::MountInfo>,
 }
 
 impl MountsInfo {
     pub fn parse_mounts() -> Result<Self> {
-        let mut mounts = File::open("/proc/mounts")?;
-        let mut contents = String::new();
-        mounts.read_to_string(&mut contents)?;
-
-        let mounts = contents
-            .split('\n')
-            .map(|item| item.split(' ').nth(1).unwrap_or("").to_owned())
-            .collect();
+        let process = Process::myself()?;
+        let mounts = process.mountinfo()?;
 
         Ok(MountsInfo { mounts })
     }
 
     pub fn non_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
-        let path = path
-            .as_ref()
-            .to_str()
-            .ok_or(anyhow!("path with non-UTF-8 character"))?;
-
-        for mount_point in self.mounts.iter() {
-            if mount_point.contains(path) {
+        let mount_points= self.mounts.iter().map(|item| &item.mount_point);
+        for mount_point in mount_points {
+            if path.as_ref().starts_with(&mount_point) {
                 // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still
                 // use this method.
                 return Ok(true);
