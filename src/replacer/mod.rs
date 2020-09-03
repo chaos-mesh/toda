@@ -4,7 +4,6 @@ use anyhow::Result;
 
 mod cwd_replacer;
 mod fd_replacer;
-mod mmap_replacer;
 
 use tracing::error;
 
