@@ -164,7 +164,7 @@ impl ProcessAccessor {
                 ; pop rdi
                 ; syscall
 
-                ; add r15, 0x10
+                ; add r15, std::mem::size_of::<ReplaceCase>() as i32
                 ; ->end:
                 ; mov r13, QWORD [->cases_length]
                 ; cmp r15, r13
@@ -174,14 +174,6 @@ impl ProcessAccessor {
             );
 
             let instructions = vec_rt.finalize()?;
-            let mut log_file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open("/tmp/code.log")?;
-            log_file.write_all(&instructions[replace.0..])?;
-            trace!("write file to /tmp/code.log");
 
             Ok((replace.0 as u64, instructions))
         })?;
@@ -223,7 +215,7 @@ impl FdReplacer {
             .filter(|(_, path)| path.starts_with(detect_path))
             .filter_map(move |(fd, path)| {
                 let stripped_path = path.strip_prefix(&detect_path).ok()?;
-                return Some((pid, (fd, new_path.join(stripped_path))));
+                Some((pid, (fd, new_path.join(stripped_path))))
             })
         }).group_by(|(pid, _)| *pid).into_iter()
         .map(|(pid, group)| (pid, group.map(|(_, group)| group)))

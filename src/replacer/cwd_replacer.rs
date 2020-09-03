@@ -1,13 +1,11 @@
 use crate::ptrace;
-use crate::utils;
 
 use super::Replacer;
 
 use std::path::{Path, PathBuf};
-use std::{collections::HashMap, fmt::Debug};
-use std::fs::read_link;
+use std::fmt::Debug;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use tracing::{info, trace, error};
 
