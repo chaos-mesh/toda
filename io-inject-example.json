@@ -6,7 +6,7 @@
             "read",
             "write"
         ],
-        "percent": 0,
+        "percent": 80,
         "latency": "5s"
     },
     {
