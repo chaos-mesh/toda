@@ -223,7 +223,7 @@ impl FdReplacer {
             .filter(|(_, path)| path.starts_with(detect_path))
             .filter_map(move |(fd, path)| {
                 let stripped_path = path.strip_prefix(&detect_path).ok()?;
-                return Some((pid, (fd, new_path.join(stripped_path))));
+                Some((pid, (fd, new_path.join(stripped_path))))
             })
         }).group_by(|(pid, _)| *pid).into_iter()
         .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
