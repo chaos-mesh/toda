@@ -6,8 +6,8 @@
             "read",
             "write"
         ],
-        "percent": 80,
-        "latency": "5s"
+        "percent": 100,
+        "latency": "500ms"
     },
     {
         "type": "latency",
@@ -23,7 +23,7 @@
         "path": "/mnt/test/*",
         "methods": [
             "read",
-            "write"
+	    "write"
         ],
         "percent": 80,
         "faults": [

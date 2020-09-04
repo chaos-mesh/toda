@@ -164,7 +164,7 @@ impl ProcessAccessor {
                 ; pop rdi
                 ; syscall
 
-                ; add r15, 0x10
+                ; add r15, std::mem::size_of::<ReplaceCase>() as i32
                 ; ->end:
                 ; mov r13, QWORD [->cases_length]
                 ; cmp r15, r13
@@ -174,14 +174,6 @@ impl ProcessAccessor {
             );
 
             let instructions = vec_rt.finalize()?;
-            let mut log_file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open("/tmp/code.log")?;
-            log_file.write_all(&instructions[replace.0..])?;
-            trace!("write file to /tmp/code.log");
 
             Ok((replace.0 as u64, instructions))
         })?;

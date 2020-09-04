@@ -4,6 +4,7 @@ use anyhow::Result;
 
 mod cwd_replacer;
 mod fd_replacer;
+mod mmap_replacer;
 
 use tracing::error;
 
@@ -30,6 +31,10 @@ impl UnionReplacer {
             Err(err) => error!("Error while preparing cwd replacer: {:?}", err),
             Ok(replacer) => replacers.push(Box::new(replacer)),
         }
+        match MmapReplacer::prepare(&detect_path, &new_path) {
+            Err(err) => error!("Error while preparing mmap replacer: {:?}", err),
+            Ok(replacer) => replacers.push(Box::new(replacer)),
+        }
 
         Ok(UnionReplacer { replacers })
     }
@@ -47,3 +52,4 @@ impl Replacer for UnionReplacer {
 
 pub use cwd_replacer::CwdReplacer;
 pub use fd_replacer::FdReplacer;
+pub use mmap_replacer::MmapReplacer;
