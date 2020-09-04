@@ -5,8 +5,8 @@ use crate::InjectorConfig;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use fuse::BackgroundSession;
@@ -126,14 +126,12 @@ impl MountInjector {
 
             recover_thread_mount_successful.store(true, Ordering::SeqCst);
         });
-        
+
         while !mount_successful.load(Ordering::SeqCst) {
             info!("help to umount the mountpoint: {:?}", &mount_point);
             match umount(&mount_point) {
                 Ok(()) => {}
-                Err(err) => {
-                    info!("umount returns error: {:?}", err)
-                }
+                Err(err) => info!("umount returns error: {:?}", err),
             }
         }
 

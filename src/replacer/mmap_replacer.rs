@@ -2,24 +2,24 @@ use crate::ptrace;
 
 use super::Replacer;
 
-use std::io::{Cursor, Read, Write};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::iter::FromIterator;
 use std::fmt::Debug;
+use std::io::{Cursor, Read, Write};
+use std::iter::FromIterator;
+use std::path::{Path, PathBuf};
 
-use tracing::{trace, info, error};
+use tracing::{error, info, trace};
 
 use procfs::process::all_processes;
 use procfs::process::MMapPath;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
 use itertools::Itertools;
 
-use nix::sys::mman::{ProtFlags, MapFlags};
+use nix::sys::mman::{MapFlags, ProtFlags};
 
 #[derive(Clone, Debug)]
 struct ReplaceCase {
@@ -44,7 +44,14 @@ struct RawReplaceCase {
 }
 
 impl RawReplaceCase {
-    pub fn new(memory_addr: u64, length: u64, prot: u64, flags: u64, new_path_offset: u64, offset: u64) -> RawReplaceCase {
+    pub fn new(
+        memory_addr: u64,
+        length: u64,
+        prot: u64,
+        flags: u64,
+        new_path_offset: u64,
+        offset: u64,
+    ) -> RawReplaceCase {
         RawReplaceCase {
             memory_addr,
             length,
@@ -82,7 +89,15 @@ impl ProcessAccessorBuilder {
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn push_case(&mut self, memory_addr: u64, length: u64, prot: u64, flags: u64,  new_path: PathBuf, offset: u64) -> anyhow::Result<()> {
+    pub fn push_case(
+        &mut self,
+        memory_addr: u64,
+        length: u64,
+        prot: u64,
+        flags: u64,
+        new_path: PathBuf,
+        offset: u64,
+    ) -> anyhow::Result<()> {
         info!("push case");
 
         let mut new_path = new_path
@@ -96,7 +111,14 @@ impl ProcessAccessorBuilder {
         let new_path_offset = self.new_paths.position();
         self.new_paths.write_all(new_path.as_slice())?;
 
-        self.cases.push(RawReplaceCase::new(memory_addr, length,  prot, flags, new_path_offset, offset));
+        self.cases.push(RawReplaceCase::new(
+            memory_addr,
+            length,
+            prot,
+            flags,
+            new_path_offset,
+            offset,
+        ));
 
         Ok(())
     }
@@ -106,14 +128,21 @@ impl FromIterator<ReplaceCase> for ProcessAccessorBuilder {
     fn from_iter<T: IntoIterator<Item = ReplaceCase>>(iter: T) -> Self {
         let mut builder = Self::new();
         for case in iter {
-            if let Err(err) = builder.push_case(case.memory_addr, case.length, case.prot, case.flags, case.path, case.offset) {
+            if let Err(err) = builder.push_case(
+                case.memory_addr,
+                case.length,
+                case.prot,
+                case.flags,
+                case.path,
+                case.offset,
+            ) {
                 error!("fail to write to AccessorBuilder. Error: {:?}", err)
             }
         }
 
         builder
     }
-} 
+}
 
 struct ProcessAccessor {
     process: ptrace::TracedProcess,
@@ -237,8 +266,13 @@ fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
         flags = MapFlags::MAP_SHARED;
     }
 
-    trace!("perms: {}, prot: {:?}, flags: {:?}", perms.as_ref(), prot, flags);
-    return (prot.bits() as u64, flags.bits() as u64)
+    trace!(
+        "perms: {}, prot: {:?}, flags: {:?}",
+        perms.as_ref(),
+        prot,
+        flags
+    );
+    return (prot.bits() as u64, flags.bits() as u64);
 }
 
 pub struct MmapReplacer {
@@ -256,54 +290,60 @@ impl MmapReplacer {
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
-        let processes = all_processes()?.into_iter().filter_map(|process| -> Option<_> {
-            let pid = process.pid;
+        let processes = all_processes()?
+            .into_iter()
+            .filter_map(|process| -> Option<_> {
+                let pid = process.pid;
 
-            let maps = process.maps().ok()?;
+                let maps = process.maps().ok()?;
 
-            Some((pid, maps))
-        }).flat_map(|(pid, maps)| {
-            maps.into_iter().filter_map(move |entry| {
-                match entry.pathname {
-                    MMapPath::Path(path) => {
-                        let (start_address, end_address) = entry.address;
-                        let length = end_address - start_address;
-                        let (prot, flags) = get_prot_and_flags_from_perms(entry.perms); 
-                        // TODO: extract permission from perms
-
-                        let case = ReplaceCase {
-                            memory_addr: start_address, 
-                            length, 
-                            prot, 
-                            flags, 
-                            path, 
-                            offset: entry.offset
-                        };
-                        Some((pid, case))
-                    },
-                    _ => None
-                }
-            }).filter(|(_, case)| case.path.starts_with(detect_path))
-            .filter_map(|(pid, mut case)| {
-                let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
-                case.path = new_path.join(stripped_path);
-                Some((pid, case))
+                Some((pid, maps))
             })
-        }).group_by(|(pid, _)| *pid).into_iter()
-        .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
-        .filter_map(|(pid, group)| {
-            match group.collect::<ProcessAccessorBuilder>().build(pid) {
-                Ok(accessor) => Some((pid, accessor)),
-                Err(err) => {
-                    error!("fail to build accessor: {:?}", err);
-                    None
-                }
-            }
-        }).collect();
+            .flat_map(|(pid, maps)| {
+                maps.into_iter()
+                    .filter_map(move |entry| {
+                        match entry.pathname {
+                            MMapPath::Path(path) => {
+                                let (start_address, end_address) = entry.address;
+                                let length = end_address - start_address;
+                                let (prot, flags) = get_prot_and_flags_from_perms(entry.perms);
+                                // TODO: extract permission from perms
 
-        Ok(MmapReplacer {
-            processes,
-        })
+                                let case = ReplaceCase {
+                                    memory_addr: start_address,
+                                    length,
+                                    prot,
+                                    flags,
+                                    path,
+                                    offset: entry.offset,
+                                };
+                                Some((pid, case))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .filter(|(_, case)| case.path.starts_with(detect_path))
+                    .filter_map(|(pid, mut case)| {
+                        let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
+                        case.path = new_path.join(stripped_path);
+                        Some((pid, case))
+                    })
+            })
+            .group_by(|(pid, _)| *pid)
+            .into_iter()
+            .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
+            .filter_map(
+                |(pid, group)| match group.collect::<ProcessAccessorBuilder>().build(pid) {
+                    Ok(accessor) => Some((pid, accessor)),
+                    Err(err) => {
+                        error!("fail to build accessor: {:?}", err);
+                        None
+                    }
+                },
+            )
+            .collect();
+
+        Ok(MmapReplacer { processes })
     }
 }
 

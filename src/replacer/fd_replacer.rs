@@ -3,15 +3,15 @@ use crate::ptrace;
 use super::Replacer;
 
 use std::io::{Cursor, Read, Write};
+use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, fmt::Debug};
-use std::iter::FromIterator;
 
 use anyhow::{anyhow, Result};
 
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
-use tracing::{info, trace, error};
+use tracing::{error, info, trace};
 
 use procfs::process::{all_processes, FDTarget};
 
@@ -90,7 +90,7 @@ impl FromIterator<(u64, PathBuf)> for ProcessAccessorBuilder {
 
         builder
     }
-} 
+}
 
 struct ProcessAccessor {
     process: ptrace::TracedProcess,
@@ -198,36 +198,40 @@ impl FdReplacer {
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
-        let processes = all_processes()?.into_iter().filter_map(|process| -> Option<_> {
-            let pid = process.pid;
+        let processes = all_processes()?
+            .into_iter()
+            .filter_map(|process| -> Option<_> {
+                let pid = process.pid;
 
-            let fd = process.fd().ok()?;
+                let fd = process.fd().ok()?;
 
-            Some((pid, fd))
-        }).flat_map(|(pid, fd)| {
-            fd.into_iter()
-            .filter_map(|entry| {
-                match entry.target {
-                    FDTarget::Path(path) => Some((entry.fd as u64, path)),
-                    _ => None
-                }
+                Some((pid, fd))
             })
-            .filter(|(_, path)| path.starts_with(detect_path))
-            .filter_map(move |(fd, path)| {
-                let stripped_path = path.strip_prefix(&detect_path).ok()?;
-                Some((pid, (fd, new_path.join(stripped_path))))
+            .flat_map(|(pid, fd)| {
+                fd.into_iter()
+                    .filter_map(|entry| match entry.target {
+                        FDTarget::Path(path) => Some((entry.fd as u64, path)),
+                        _ => None,
+                    })
+                    .filter(|(_, path)| path.starts_with(detect_path))
+                    .filter_map(move |(fd, path)| {
+                        let stripped_path = path.strip_prefix(&detect_path).ok()?;
+                        Some((pid, (fd, new_path.join(stripped_path))))
+                    })
             })
-        }).group_by(|(pid, _)| *pid).into_iter()
-        .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
-        .filter_map(|(pid, group)| {
-            match group.collect::<ProcessAccessorBuilder>().build(pid) {
-                Ok(accessor) => Some((pid, accessor)),
-                Err(err) => {
-                    error!("fail to build accessor: {:?}", err);
-                    None
-                }
-            }
-        }).collect();
+            .group_by(|(pid, _)| *pid)
+            .into_iter()
+            .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
+            .filter_map(
+                |(pid, group)| match group.collect::<ProcessAccessorBuilder>().build(pid) {
+                    Ok(accessor) => Some((pid, accessor)),
+                    Err(err) => {
+                        error!("fail to build accessor: {:?}", err);
+                        None
+                    }
+                },
+            )
+            .collect();
 
         Ok(FdReplacer { processes })
     }

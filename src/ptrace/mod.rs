@@ -5,13 +5,13 @@ use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{info, trace, error};
+use tracing::{error, info, trace};
 
-use std::collections::HashMap;
 use std::cell::RefCell;
-use std::path::Path;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 
 thread_local! {
     static TRACED_PROCESS: RefCell<HashMap<i32, i32>> = RefCell::new(HashMap::new())
@@ -36,7 +36,7 @@ impl TracedProcess {
                     ptrace::attach(pid)?;
                     info!("trace process: {} successfully", pid);
                     set_ref.insert(raw_pid, 1);
-            
+
                     // TODO: check wait result
                     let status = wait::waitpid(pid, None)?;
                     info!("wait status: {:?}", status);
@@ -160,14 +160,11 @@ impl TracedProcess {
     pub fn chdir<P: AsRef<Path>>(&self, filename: P) -> Result<()> {
         let filename = CString::new(filename.as_ref().as_os_str().as_bytes())?;
         let path = filename.as_bytes_with_nul();
-        
+
         self.with_mmap(path.len() as u64, |process, addr| {
             process.write_mem(addr, path)?;
 
-            self.syscall(
-                80, 
-            &[addr],
-            )?;
+            self.syscall(80, &[addr])?;
             Ok(())
         })
     }
@@ -268,10 +265,8 @@ impl Drop for TracedProcess {
                     }
 
                     Ok(())
-                },
-                None => {
-                    Err(anyhow::anyhow!("haven't traced this process"))
                 }
+                None => Err(anyhow::anyhow!("haven't traced this process")),
             }
         }) {
             error!("error while droping process: {:?}", err)
