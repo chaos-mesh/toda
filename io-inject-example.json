@@ -25,7 +25,7 @@
             "read",
 	    "write"
         ],
-        "percent": 80,
+        "percent": 0,
         "faults": [
             {
                 "errno": 1,

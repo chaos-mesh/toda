@@ -1,6 +1,7 @@
 use crate::hookfs;
 use crate::injector::MultiInjector;
 use crate::mount;
+use crate::namespace::{with_mnt_pid_namespace, JoinHandler};
 use crate::InjectorConfig;
 
 use std::ffi::OsStr;
@@ -9,20 +10,87 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use fuse::BackgroundSession;
 
 use nix::mount::umount;
+use nix::sys::wait::waitpid;
+use nix::unistd::Pid;
 
-use tracing::info;
+use tracing::{error, info, trace};
 
 #[derive(Debug)]
 pub struct MountInjector {
     original_path: PathBuf,
     new_path: PathBuf,
-    fuse_session: Option<BackgroundSession<'static>>,
-    mounts: mount::MountsInfo,
     injector_config: Vec<InjectorConfig>,
-    hookfs: Option<Arc<hookfs::HookFs>>,
+}
+
+pub struct MountInjectionGuard {
+    original_path: PathBuf,
+    new_path: PathBuf,
+    hookfs: Arc<hookfs::HookFs>,
+    handler: JoinHandler<Result<()>>,
+}
+
+impl MountInjectionGuard {
+    pub fn enable_injection(&self) {
+        self.hookfs.enable_injection();
+    }
+
+    pub fn disable_injection(&self) {
+        self.hookfs.disable_injection();
+    }
+
+    // This method should be called in host namespace
+    #[tracing::instrument(skip(self))]
+    pub fn recover_mount(&mut self, target_pid: i32) -> Result<()> {
+        let mount_point = self.original_path.clone();
+
+        let mount_successful = Arc::new(AtomicBool::new(false));
+        let recover_thread_mount_successful = mount_successful.clone();
+
+        let handler = with_mnt_pid_namespace(
+            box || {
+                while !mount_successful.load(Ordering::SeqCst) {
+                    info!("help to umount the mountpoint: {:?}", &mount_point);
+                    if let Err(err) = umount(&mount_point) {
+                        error!("umount returns error: {:?}", err);
+                    }
+                }
+
+                info!("umount successfully");
+
+                Ok(())
+            },
+            target_pid,
+        )?;
+
+        self.handler.join()??;
+
+        recover_thread_mount_successful.store(true, Ordering::SeqCst);
+
+        if let Err(err) = handler.join()? {
+            error!("fail to join thread: {:?}", err)
+        }
+
+        with_mnt_pid_namespace(
+            box || {
+                let mounts = mount::MountsInfo::parse_mounts()?;
+
+                if mounts.non_root(&self.original_path)? {
+                    // TODO: make the parent mount points private before move mount points
+                    mounts
+                        .move_mount(&self.new_path, &self.original_path)?;
+                } else {
+                    return Err(anyhow!("inject on a root mount"));
+                }
+
+                Ok(())
+            },
+            target_pid,
+        )?.join()??;
+
+        Ok(())
+    }
 }
 
 impl MountInjector {
@@ -49,100 +117,73 @@ impl MountInjector {
         Ok(MountInjector {
             original_path,
             new_path,
-            fuse_session: None,
-            mounts: mount::MountsInfo::parse_mounts()?,
             injector_config,
-            hookfs: None,
         })
     }
 
-    pub fn mount(&mut self) -> Result<()> {
-        if self.mounts.non_root(&self.original_path)? {
-            // TODO: make the parent mount points private before move mount points
-            self.mounts
-                .move_mount(&self.original_path, &self.new_path)?;
-        } else {
-            return Err(anyhow!("inject on a root mount"));
-        }
+    // This method should be called in host namespace
+    pub fn mount(&mut self, target_pid: i32) -> Result<MountInjectionGuard> {
+        with_mnt_pid_namespace(
+            box || -> Result<_> {
+            let mounts = mount::MountsInfo::parse_mounts()?;
+
+            if mounts.non_root(&self.original_path)? {
+                // TODO: make the parent mount points private before move mount points
+                mounts
+                    .move_mount(&self.original_path, &self.new_path)?;
+            } else {
+                return Err(anyhow!("inject on a root mount"));
+            }
+
+            Ok(())
+        }, target_pid)?.join()??;
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 
-        let fs = hookfs::AsyncFileSystem::from(hookfs::HookFs::new(
+        let hookfs = Arc::new(hookfs::HookFs::new(
             &self.original_path,
             &self.new_path,
             injectors,
         ));
-        let inner_fs = fs.clone_inner();
-        let session = unsafe {
-            std::fs::create_dir_all(self.new_path.as_path())?;
 
-            let args = [
-                "allow_other",
-                "nonempty",
-                "fsname=toda",
-                "default_permissions",
-            ];
-            let flags: Vec<_> = args
-                .iter()
-                .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
-                .collect();
+        let original_path = self.original_path.clone();
+        let new_path = self.new_path.clone();
+        let cloned_hookfs = hookfs.clone();
 
-            info!("mount with flags {:?}", flags);
+        let handler = with_mnt_pid_namespace(
+            box || {
+                let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
-            fuse::spawn_mount(fs, &self.original_path, &flags)?
-        };
+                std::fs::create_dir_all(new_path.as_path())?;
+
+                let args = [
+                    "allow_other",
+                    "nonempty",
+                    "fsname=toda",
+                    "default_permissions",
+                ];
+                let flags: Vec<_> = args
+                    .iter()
+                    .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
+                    .collect();
+
+                info!("mount with flags {:?}", flags);
+
+                fuse::mount(fs, &original_path, &flags)?;
+
+                Ok(())
+            }, target_pid
+        )?;
         info!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         std::thread::sleep(std::time::Duration::from_secs(1));
 
-        self.fuse_session = Some(session);
-        self.hookfs = Some(inner_fs);
-
-        Ok(())
-    }
-
-    pub fn enable_injection(&self) {
-        if let Some(hookfs) = &self.hookfs {
-            hookfs.enable_injection();
-        }
-    }
-
-    pub fn disable_injection(&self) {
-        if let Some(hookfs) = &self.hookfs {
-            hookfs.disable_injection();
-        }
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn recover_mount(&mut self) -> Result<()> {
-        let injection = self.fuse_session.take().unwrap();
-        let mount_point = injection.mountpoint.clone();
-
-        let mount_successful = Arc::new(AtomicBool::new(false));
-        let recover_thread_mount_successful = mount_successful.clone();
-        std::thread::spawn(move || {
-            drop(injection);
-
-            recover_thread_mount_successful.store(true, Ordering::SeqCst);
-        });
-
-        while !mount_successful.load(Ordering::SeqCst) {
-            info!("help to umount the mountpoint: {:?}", &mount_point);
-            match umount(&mount_point) {
-                Ok(()) => {}
-                Err(err) => info!("umount returns error: {:?}", err),
-            }
-        }
-
-        if self.mounts.non_root(&self.original_path)? {
-            // TODO: make the parent mount points private before move mount points
-            self.mounts
-                .move_mount(&self.new_path, &self.original_path)?;
-        } else {
-            return Err(anyhow!("inject on a root mount"));
-        }
-
-        Ok(())
+        Ok(MountInjectionGuard {
+            handler,
+            hookfs,
+            original_path: self.original_path.clone(),
+            new_path: self.new_path.clone(),
+        })
     }
 }

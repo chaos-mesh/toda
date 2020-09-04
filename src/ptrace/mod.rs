@@ -5,7 +5,7 @@ use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{error, info, trace};
+use tracing::{info, trace};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,41 +13,65 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-thread_local! {
-    static TRACED_PROCESS: RefCell<HashMap<i32, i32>> = RefCell::new(HashMap::new())
+// There should be only one PtraceManager in one thread. But as we don't implement TLS
+// , we cannot use thread-local variables safely.
+#[derive(Debug, Default)]
+pub struct PtraceManager {
+    counter: RefCell<HashMap<i32, i32>>,
 }
 
-#[derive(Debug)]
-pub struct TracedProcess {
-    pub pid: i32,
-}
-
-impl TracedProcess {
+impl PtraceManager {
     #[tracing::instrument]
-    pub fn trace(pid: i32) -> Result<TracedProcess> {
-        TRACED_PROCESS.with(|set| {
-            let raw_pid = pid;
-            let pid = Pid::from_raw(pid);
+    pub fn trace(&self, pid: i32) -> Result<TracedProcess> {
+        let raw_pid = pid;
+        let pid = Pid::from_raw(pid);
 
-            let mut set_ref = set.borrow_mut();
-            match set_ref.get_mut(&raw_pid) {
-                Some(count) => *count += 1,
-                None => {
-                    ptrace::attach(pid)?;
-                    info!("trace process: {} successfully", pid);
-                    set_ref.insert(raw_pid, 1);
+        let mut counter_ref = self.counter.borrow_mut();
+        match counter_ref.get_mut(&raw_pid) {
+            Some(count) => *count += 1,
+            None => {
+                ptrace::attach(pid)?;
+                info!("trace process: {} successfully", pid);
+                counter_ref.insert(raw_pid, 1);
 
-                    // TODO: check wait result
-                    let status = wait::waitpid(pid, None)?;
-                    info!("wait status: {:?}", status);
-                }
+                // TODO: check wait result
+                let status = wait::waitpid(pid, None)?;
+                info!("wait status: {:?}", status);
             }
-            Ok(TracedProcess { pid: raw_pid })
+        }
+        Ok(TracedProcess {
+            pid: raw_pid,
+            manager: self,
         })
+    }
+
+    pub fn detach(&self, pid: i32) -> Result<()> {
+        let mut counter_ref = self.counter.borrow_mut();
+        match counter_ref.get_mut(&pid) {
+            Some(count) => {
+                *count -= 1;
+                info!("decrease counter to {}", *count);
+                if *count < 1 {
+                    counter_ref.remove(&pid);
+
+                    info!("detach process: {}", pid);
+                    ptrace::detach(Pid::from_raw(pid), None)?;
+                }
+
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("haven't traced this process")),
+        }
     }
 }
 
-impl TracedProcess {
+#[derive(Debug)]
+pub struct TracedProcess<'a> {
+    pub pid: i32,
+    manager: &'a PtraceManager,
+}
+
+impl<'a> TracedProcess<'a> {
     #[tracing::instrument]
     fn protect(&self) -> Result<ThreadGuard> {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
@@ -247,29 +271,16 @@ impl TracedProcess {
     }
 }
 
-impl Drop for TracedProcess {
+impl<'a> Drop for TracedProcess<'a> {
     #[tracing::instrument]
     fn drop(&mut self) {
         info!("dropping traced process: {}", self.pid);
-        if let Err(err) = TRACED_PROCESS.with(|set| {
-            let mut set_ref = set.borrow_mut();
-            match set_ref.get_mut(&self.pid) {
-                Some(count) => {
-                    *count -= 1;
-                    info!("decrease counter to {}", *count);
-                    if *count < 1 {
-                        set_ref.remove(&self.pid);
 
-                        info!("detach process: {}", self.pid);
-                        ptrace::detach(Pid::from_raw(self.pid), None)?;
-                    }
-
-                    Ok(())
-                }
-                None => Err(anyhow::anyhow!("haven't traced this process")),
-            }
-        }) {
-            error!("error while droping process: {:?}", err)
+        if let Err(err) = self.manager.detach(self.pid) {
+            info!(
+                "deteching process {} failed with error: {:?}",
+                self.pid, err
+            )
         }
     }
 }

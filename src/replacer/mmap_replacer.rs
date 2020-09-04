@@ -77,8 +77,12 @@ impl ProcessAccessorBuilder {
         }
     }
 
-    pub fn build(self, pid: i32) -> Result<ProcessAccessor> {
-        let process = ptrace::TracedProcess::trace(pid)?;
+    pub fn build<'a>(
+        self,
+        pid: i32,
+        ptrace_manager: &'a ptrace::PtraceManager,
+    ) -> Result<ProcessAccessor<'a>> {
+        let process = ptrace_manager.trace(pid)?;
 
         Ok(ProcessAccessor {
             process,
@@ -144,20 +148,20 @@ impl FromIterator<ReplaceCase> for ProcessAccessorBuilder {
     }
 }
 
-struct ProcessAccessor {
-    process: ptrace::TracedProcess,
+struct ProcessAccessor<'a> {
+    process: ptrace::TracedProcess<'a>,
 
     cases: Vec<RawReplaceCase>,
     new_paths: Cursor<Vec<u8>>,
 }
 
-impl Debug for ProcessAccessor {
+impl<'a> Debug for ProcessAccessor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.process.fmt(f)
     }
 }
 
-impl ProcessAccessor {
+impl<'a> ProcessAccessor<'a> {
     #[tracing::instrument]
     pub fn run(mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
@@ -275,16 +279,17 @@ fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
     return (prot.bits() as u64, flags.bits() as u64);
 }
 
-pub struct MmapReplacer {
-    processes: HashMap<i32, ProcessAccessor>,
+pub struct MmapReplacer<'a> {
+    processes: HashMap<i32, ProcessAccessor<'a>>,
 }
 
-impl MmapReplacer {
+impl<'a> MmapReplacer<'a> {
     #[tracing::instrument(skip(detect_path, new_path))]
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
-    ) -> Result<MmapReplacer> {
+        ptrace_manager: &'a ptrace::PtraceManager,
+    ) -> Result<MmapReplacer<'a>> {
         info!("preparing mmap replacer");
 
         let detect_path = detect_path.as_ref();
@@ -332,22 +337,25 @@ impl MmapReplacer {
             .group_by(|(pid, _)| *pid)
             .into_iter()
             .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
-            .filter_map(
-                |(pid, group)| match group.collect::<ProcessAccessorBuilder>().build(pid) {
+            .filter_map(|(pid, group)| {
+                match group
+                    .collect::<ProcessAccessorBuilder>()
+                    .build(pid, ptrace_manager)
+                {
                     Ok(accessor) => Some((pid, accessor)),
                     Err(err) => {
                         error!("fail to build accessor: {:?}", err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect();
 
         Ok(MmapReplacer { processes })
     }
 }
 
-impl Replacer for MmapReplacer {
+impl<'a> Replacer for MmapReplacer<'a> {
     #[tracing::instrument(skip(self))]
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");

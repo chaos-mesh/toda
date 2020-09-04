@@ -7,7 +7,7 @@ use nix::mount::{mount, MsFlags};
 
 use procfs::process::{self, Process};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MountsInfo {
     mounts: Vec<process::MountInfo>,
 }

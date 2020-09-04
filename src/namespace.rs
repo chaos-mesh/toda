@@ -1,12 +1,14 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
-use nix::errno::errno;
 use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
-use nix::sys::stat;
+use nix::sys::{stat, wait};
+use nix::unistd::Pid;
+use nix::Error;
 
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Arc;
 
 use tracing::{error, info};
 
@@ -19,29 +21,62 @@ pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     Ok(())
 }
 
-pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) -> Result<R> {
-    // FIXME: memory leak here
-    let mut ret = None;
-    let ret_ptr: AtomicPtr<Option<Result<R>>> = AtomicPtr::new(&mut ret);
+pub struct JoinHandler<R> {
+    pid: i32,
+    result: Arc<AtomicPtr<Option<R>>>,
+    _stack: Vec<u8>,
+}
 
-    let args = Box::new((f, &ret_ptr, Box::new(pid)));
+impl<R> JoinHandler<R> {
+    pub fn join(&self) -> Result<R> {
+        let status = wait::waitpid(Pid::from_raw(self.pid), None)?;
+        info!("process {} stopped with status: {:?}", self.pid, status);
 
-    extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
-        let args = unsafe {
-            Box::from_raw(args as *mut (Box<F>, &AtomicPtr<Option<Result<R>>>, Box<i32>))
-        };
-        let (f, ret_ptr, pid) = *args;
+        // FIXME: if the cloned process exited/crashed, this process can never resume
+        // A possible solution is to wait this process and load the atomic ptr. If this
+        // pointer returns None, then we can return an error (or pack the return value with
+        // Option<Result<R>>)
+        let ret = self.result.load(Ordering::Acquire);
+        unsafe {
+            if let Some(ret) = (&mut *ret).take() {
+                info!("clone returned {}", self.pid);
 
-        if let Err(err) = enter_mnt_namespace(*pid) {
-            let ret = Box::new(Some(Err(err)));
-            ret_ptr.store(Box::leak(ret), Ordering::SeqCst)
+                return Ok(ret);
+            } else {
+                return Err(anyhow!("subprocess exited unexpectedly"));
+            }
         }
+    }
+}
 
-        let ret = Box::new(Some(f()));
-        ret_ptr.store(Box::leak(ret), Ordering::SeqCst);
-
-        0
+extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> libc::c_int {
+    let args = unsafe {
+        Box::from_raw(args as *mut (Box<F>, Arc<AtomicPtr<Option<Result<R>>>>, Box<i32>))
     };
+    let (f, ret_ptr, pid) = *args;
+
+    if let Err(err) = enter_mnt_namespace(*pid) {
+        let ret = Box::new(Some(Err(err)));
+        ret_ptr.store(Box::leak(ret), Ordering::Release)
+    }
+
+    let ret = Box::new(Some(f()));
+    let ret = Box::leak(ret) as *mut Option<Result<R>>;
+    info!("setting result");
+    ret_ptr.store(ret, Ordering::Release);
+
+    unsafe { libc::exit(0) }
+}
+
+pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(
+    f: Box<F>,
+    pid: i32,
+) -> Result<JoinHandler<Result<R>>> {
+    // FIXME: memory leak here
+    let ret = Box::new(None);
+    let ret_ptr: Arc<AtomicPtr<Option<Result<R>>>> = Arc::new(AtomicPtr::new(Box::leak(ret)));
+
+    let args = Box::new((f, ret_ptr.clone(), Box::new(pid)));
 
     let mut stack = vec![0u8; 1024 * 1024];
 
@@ -61,22 +96,12 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(f: Box<F>, pid: i32) 
         )
     };
     if pid == -1 {
-        error!("clone returned with error: {:?}", errno());
-        panic!();
+        return Err(Error::last().into());
     }
 
-    loop {
-        // FIXME: if the cloned process exited/crashed, this process can never resume
-        // A possible solution is to wait this process and load the atomic ptr. If this
-        // pointer returns None, then we can return an error (or pack the return value with
-        // Option<Result<R>>)
-        let ret = ret_ptr.load(Ordering::SeqCst);
-        unsafe {
-            if let Some(ret) = (&mut *ret).take() {
-                info!("clone returned {}", pid);
-
-                return ret;
-            }
-        }
-    }
+    return Ok(JoinHandler {
+        pid,
+        _stack: stack,
+        result: ret_ptr,
+    });
 }

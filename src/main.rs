@@ -1,12 +1,14 @@
 #![feature(box_syntax)]
 #![feature(async_closure)]
 #![feature(vec_into_raw_parts)]
+#![feature(atomic_mut_ptr)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
 extern crate derive_more;
 
 mod fuse_device;
+mod futex;
 mod hookfs;
 mod injector;
 mod mount;
@@ -17,7 +19,7 @@ mod replacer;
 mod utils;
 
 use injector::InjectorConfig;
-use mount_injector::MountInjector;
+use mount_injector::{MountInjectionGuard, MountInjector};
 use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
@@ -26,11 +28,12 @@ use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -45,23 +48,30 @@ struct Options {
     verbose: String,
 }
 
-fn inject(option: Options) -> Result<MountInjector> {
+fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("parse injector configs");
     let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
     info!("inject with config {:?}", injector_config);
 
     let path = option.path.clone();
     let fuse_dev = fuse_device::read_fuse_dev_t()?;
-    let mount_injector = namespace::with_mnt_pid_namespace(
+
+    let before_mount = Arc::new(futex::Futex::new());
+    let after_mount = Arc::new(futex::Futex::new());
+    let cloned_before_mount = before_mount.clone();
+    let cloned_after_mount = after_mount.clone();
+    
+    let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
-            let mut replacer = UnionReplacer::prepare(&path, &path)?;
-            let mut injection = MountInjector::create_injection(&path, injector_config)?;
+            let mut replacer = UnionReplacer::new();
+            replacer.prepare(&path, &path)?;
 
             if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
                 info!("fail to make /dev/fuse node: {}", err)
             }
 
-            injection.mount()?;
+            cloned_before_mount.wake(1)?;
+            cloned_after_mount.wait()?;
 
             // At this time, `mount --move` has already been executed.
             // Our FUSE are mounted on the "path", so we
@@ -69,41 +79,64 @@ fn inject(option: Options) -> Result<MountInjector> {
             drop(replacer);
             info!("replacer detached");
 
-            Ok(injection)
+            Ok(())
         },
         option.pid,
     )?;
 
-    info!("enable injection");
-    mount_injector.enable_injection();
+    before_mount.wait()?;
 
-    Ok(mount_injector)
+    let mut injection = MountInjector::create_injection(&option.path, injector_config)?;
+    let mount_guard = injection.mount(option.pid)?;
+
+    after_mount.wake(1)?;
+
+    handler.join()??;
+    info!("enable injection");
+    mount_guard.enable_injection();
+
+    Ok(mount_guard)
 }
 
-fn resume(option: Options, mut mount_injector: MountInjector) -> Result<()> {
+fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
-    mount_injector.disable_injection();
+    mount_guard.disable_injection();
     let path = option.path.clone();
 
-    namespace::with_mnt_pid_namespace(
-        box move || -> Result<()> {
+    let pid = option.pid;
+
+    let before_recover_mount = Arc::new(futex::Futex::new());
+    let after_recover_mount = Arc::new(futex::Futex::new());
+    let cloned_before_recover_mount = before_recover_mount.clone();
+    let cloned_after_recover_mount = after_recover_mount.clone();
+    let handler = namespace::with_mnt_pid_namespace(
+        box move || -> Result<_> {
             let (_, new_path) = encode_path(&path)?;
 
-            let mut replacer = UnionReplacer::prepare(&path, &new_path)?;
+            let mut replacer = UnionReplacer::new();
+            replacer.prepare(&path, &new_path)?;
             info!("running replacer");
             replacer.run()?;
 
-            info!("recovering mount");
-            // TODO: retry umount multiple times
-            mount_injector.recover_mount()?;
+            cloned_before_recover_mount.wake(1)?;
+            after_recover_mount.wait()?;
 
             drop(replacer);
             info!("replacers detached");
             info!("recover successfully");
             Ok(())
         },
-        option.pid,
+        pid,
     )?;
+
+    before_recover_mount.wait()?;
+    info!("recovering mount");
+    mount_guard.recover_mount(option.pid)?;
+    cloned_after_recover_mount.wake(1)?;
+
+    if let Err(err) = handler.join()? {
+        error!("join error: {:?}", err);
+    }
 
     Ok(())
 }
@@ -127,7 +160,7 @@ fn main() -> Result<()> {
     }
 
     // ignore dying children
-    unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
+    // unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 

@@ -12,17 +12,18 @@ use tracing::{error, info, trace};
 use procfs::process::all_processes;
 
 #[derive(Debug)]
-pub struct CwdReplacer {
-    processes: Vec<ptrace::TracedProcess>,
+pub struct CwdReplacer<'a> {
+    processes: Vec<ptrace::TracedProcess<'a>>,
     new_path: PathBuf,
 }
 
-impl CwdReplacer {
+impl<'a> CwdReplacer<'a> {
     #[tracing::instrument(skip(detect_path, new_path))]
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
-    ) -> Result<CwdReplacer> {
+        ptrace_manager: &'a ptrace::PtraceManager,
+    ) -> Result<CwdReplacer<'a>> {
         info!("preparing cmdreplacer");
 
         let processes = all_processes()?
@@ -40,7 +41,7 @@ impl CwdReplacer {
                 }
             })
             .filter(|(_, path)| path.starts_with(detect_path.as_ref()))
-            .filter_map(|(pid, _)| match ptrace::TracedProcess::trace(pid) {
+            .filter_map(|(pid, _)| match ptrace_manager.trace(pid) {
                 Ok(process) => Some(process),
                 Err(err) => {
                     error!("fail to ptrace process: pid({}) with error: {:?}", pid, err);
@@ -56,7 +57,7 @@ impl CwdReplacer {
     }
 }
 
-impl Replacer for CwdReplacer {
+impl<'a> Replacer for CwdReplacer<'a> {
     #[tracing::instrument]
     fn run(&mut self) -> Result<()> {
         info!("running cwd replacer");
