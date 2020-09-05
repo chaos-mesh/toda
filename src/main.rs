@@ -60,18 +60,23 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     let after_mount = Arc::new(futex::Futex::new());
     let cloned_before_mount = before_mount.clone();
     let cloned_after_mount = after_mount.clone();
-    
+
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
+            let ptrace_manager = ptrace::PtraceManager::default();
+
             let mut replacer = UnionReplacer::new();
-            replacer.prepare(&path, &path)?;
+            replacer.prepare(&ptrace_manager, &path, &path)?;
 
             if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
                 info!("fail to make /dev/fuse node: {}", err)
             }
 
+            info!("wakeup host process to mount");
             cloned_before_mount.wake(1)?;
+            info!("wait for mount");
             cloned_after_mount.wait()?;
+            info!("mounted successfully a\nd resume from waiting");
 
             // At this time, `mount --move` has already been executed.
             // Our FUSE are mounted on the "path", so we
@@ -113,13 +118,15 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
         box move || -> Result<_> {
             let (_, new_path) = encode_path(&path)?;
 
+            let ptrace_manager = ptrace::PtraceManager::default();
+
             let mut replacer = UnionReplacer::new();
-            replacer.prepare(&path, &new_path)?;
+            replacer.prepare(&ptrace_manager, &path, &new_path)?;
             info!("running replacer");
             replacer.run()?;
 
             cloned_before_recover_mount.wake(1)?;
-            after_recover_mount.wait()?;
+            cloned_after_recover_mount.wait()?;
 
             drop(replacer);
             info!("replacers detached");
@@ -132,7 +139,7 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     before_recover_mount.wait()?;
     info!("recovering mount");
     mount_guard.recover_mount(option.pid)?;
-    cloned_after_recover_mount.wake(1)?;
+    after_recover_mount.wake(1)?;
 
     if let Err(err) = handler.join()? {
         error!("join error: {:?}", err);

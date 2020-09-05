@@ -1,11 +1,13 @@
-use std::ptr::null;
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use libc::{syscall, SYS_futex, FUTEX_WAIT, FUTEX_WAKE};
 
 use anyhow::Result;
 use nix::Error;
 
+use tracing::{error, info};
+
+// Don't reuse one futex!
 pub struct Futex {
     inner: AtomicI32,
 }
@@ -18,18 +20,25 @@ impl Futex {
     }
     pub fn wait(&self) -> Result<()> {
         let ret = unsafe { syscall(SYS_futex, self.inner.as_mut_ptr(), FUTEX_WAIT, 0, 0, 0, 0) };
+        println!("resume from futex");
 
         if ret == -1 {
-            Err(Error::last().into())
+            let err = Error::last();
+            println!("error while waiting for futex: {:?}", err);
+            Err(err.into())
         } else {
             Ok(())
         }
     }
     pub fn wake(&self, nr: i32) -> Result<()> {
+        self.inner.store(1, Ordering::SeqCst);
         let ret = unsafe { syscall(SYS_futex, self.inner.as_mut_ptr(), FUTEX_WAKE, nr, 0, 0, 0) };
+        info!("wake up futex");
 
         if ret == -1 {
-            Err(Error::last().into())
+            let err = Error::last();
+            error!("error while waking up futex: {:?}", err);
+            Err(err.into())
         } else {
             Ok(())
         }

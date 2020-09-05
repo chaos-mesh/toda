@@ -197,7 +197,7 @@ impl<'a> FdReplacer<'a> {
         detect_path: P1,
         new_path: P2,
         ptrace_manager: &'a ptrace::PtraceManager,
-    ) -> Result<FdReplacer> {
+    ) -> Result<FdReplacer<'a>> {
         info!("preparing fd replacer");
 
         let detect_path = detect_path.as_ref();

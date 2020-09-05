@@ -14,44 +14,40 @@ pub trait Replacer {
     fn run(&mut self) -> Result<()>;
 }
 
-pub struct UnionReplacer {
-    replacers: Vec<Box<dyn Replacer>>,
-    ptrace_manager: ptrace::PtraceManager,
+pub struct UnionReplacer<'a> {
+    replacers: Vec<Box<dyn Replacer + 'a>>,
 }
 
-impl UnionReplacer {
-    pub fn new() -> UnionReplacer {
+impl<'a> UnionReplacer<'a> {
+    pub fn new() -> UnionReplacer<'a> {
         UnionReplacer {
             replacers: Vec::new(),
-            ptrace_manager: ptrace::PtraceManager::default(),
         }
     }
 
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
-        &self,
+        &mut self,
+        ptrace_manager: &'a ptrace::PtraceManager,
         detect_path: P1,
         new_path: P2,
     ) -> Result<()> {
-        let mut replacers: Vec<Box<dyn Replacer>> = Vec::new();
-
-        match FdReplacer::prepare(&detect_path, &new_path, &self.ptrace_manager) {
+        match FdReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
             Err(err) => error!("Error while preparing fd replacer: {:?}", err),
-            Ok(replacer) => replacers.push(Box::new(replacer)),
+            Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
-        match CwdReplacer::prepare(&detect_path, &new_path, &self.ptrace_manager) {
+        match CwdReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
             Err(err) => error!("Error while preparing cwd replacer: {:?}", err),
-            Ok(replacer) => replacers.push(Box::new(replacer)),
+            Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
-        match MmapReplacer::prepare(&detect_path, &new_path, &self.ptrace_manager) {
+        match MmapReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
             Err(err) => error!("Error while preparing mmap replacer: {:?}", err),
-            Ok(replacer) => replacers.push(Box::new(replacer)),
+            Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
-
         Ok(())
     }
 }
 
-impl Replacer for UnionReplacer {
+impl<'a> Replacer for UnionReplacer<'a> {
     fn run(&mut self) -> Result<()> {
         for replacer in self.replacers.iter_mut() {
             replacer.run()?;

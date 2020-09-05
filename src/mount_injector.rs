@@ -12,10 +12,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
-use nix::sys::wait::waitpid;
-use nix::unistd::Pid;
 
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 #[derive(Debug)]
 pub struct MountInjector {
@@ -45,15 +43,15 @@ impl MountInjectionGuard {
     pub fn recover_mount(&mut self, target_pid: i32) -> Result<()> {
         let mount_point = self.original_path.clone();
 
-        let mount_successful = Arc::new(AtomicBool::new(false));
-        let recover_thread_mount_successful = mount_successful.clone();
+        let umount_successfully = Arc::new(AtomicBool::new(false));
+        let cloned_umount_successfully = umount_successfully.clone();
 
         let handler = with_mnt_pid_namespace(
             box || {
-                while !mount_successful.load(Ordering::SeqCst) {
+                while !cloned_umount_successfully.load(Ordering::SeqCst) {
                     info!("help to umount the mountpoint: {:?}", &mount_point);
                     if let Err(err) = umount(&mount_point) {
-                        error!("umount returns error: {:?}", err);
+                        info!("umount returns error: {:?}", err);
                     }
                 }
 
@@ -66,7 +64,7 @@ impl MountInjectionGuard {
 
         self.handler.join()??;
 
-        recover_thread_mount_successful.store(true, Ordering::SeqCst);
+        umount_successfully.store(true, Ordering::SeqCst);
 
         if let Err(err) = handler.join()? {
             error!("fail to join thread: {:?}", err)
@@ -78,8 +76,7 @@ impl MountInjectionGuard {
 
                 if mounts.non_root(&self.original_path)? {
                     // TODO: make the parent mount points private before move mount points
-                    mounts
-                        .move_mount(&self.new_path, &self.original_path)?;
+                    mounts.move_mount(&self.new_path, &self.original_path)?;
                 } else {
                     return Err(anyhow!("inject on a root mount"));
                 }
@@ -87,7 +84,8 @@ impl MountInjectionGuard {
                 Ok(())
             },
             target_pid,
-        )?.join()??;
+        )?
+        .join()??;
 
         Ok(())
     }
@@ -125,18 +123,20 @@ impl MountInjector {
     pub fn mount(&mut self, target_pid: i32) -> Result<MountInjectionGuard> {
         with_mnt_pid_namespace(
             box || -> Result<_> {
-            let mounts = mount::MountsInfo::parse_mounts()?;
+                let mounts = mount::MountsInfo::parse_mounts()?;
 
-            if mounts.non_root(&self.original_path)? {
-                // TODO: make the parent mount points private before move mount points
-                mounts
-                    .move_mount(&self.original_path, &self.new_path)?;
-            } else {
-                return Err(anyhow!("inject on a root mount"));
-            }
+                if mounts.non_root(&self.original_path)? {
+                    // TODO: make the parent mount points private before move mount points
+                    mounts.move_mount(&self.original_path, &self.new_path)?;
+                } else {
+                    return Err(anyhow!("inject on a root mount"));
+                }
 
-            Ok(())
-        }, target_pid)?.join()??;
+                Ok(())
+            },
+            target_pid,
+        )?
+        .join()??;
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 
@@ -172,7 +172,8 @@ impl MountInjector {
                 fuse::mount(fs, &original_path, &flags)?;
 
                 Ok(())
-            }, target_pid
+            },
+            target_pid,
         )?;
         info!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up
