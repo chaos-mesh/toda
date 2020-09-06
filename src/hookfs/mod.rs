@@ -29,7 +29,7 @@ use nix::unistd::{
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use tracing::{debug, error, trace};
+use log::{debug, error, trace};
 
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};

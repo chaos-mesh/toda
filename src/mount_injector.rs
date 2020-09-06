@@ -13,7 +13,9 @@ use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
 
-use tracing::{error, info};
+use log::{error, info};
+
+use libc::sleep;
 
 #[derive(Debug)]
 pub struct MountInjector {
@@ -52,6 +54,11 @@ impl MountInjectionGuard {
                     info!("help to umount the mountpoint: {:?}", &mount_point);
                     if let Err(err) = umount(&mount_point) {
                         info!("umount returns error: {:?}", err);
+                    }
+
+                    // TODO: sleep for shorter time
+                    unsafe {
+                        sleep(1);
                     }
                 }
 

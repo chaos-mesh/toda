@@ -11,7 +11,7 @@ use anyhow::{anyhow, Result};
 
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
-use tracing::{error, info, trace};
+use log::{error, info, trace};
 
 use procfs::process::{all_processes, FDTarget};
 

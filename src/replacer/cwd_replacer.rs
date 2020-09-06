@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use tracing::{error, info, trace};
+use log::{error, info, trace};
 
 use procfs::process::all_processes;
 

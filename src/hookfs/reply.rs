@@ -1,6 +1,6 @@
 use fuse::*;
+use log::{debug, error, trace};
 use time::{get_time, Timespec};
-use tracing::{debug, error, trace};
 
 use super::errors::Result;
 

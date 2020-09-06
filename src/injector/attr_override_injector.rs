@@ -6,8 +6,8 @@ use crate::hookfs::{Reply, Result};
 
 use async_trait::async_trait;
 use fuse::{FileAttr, FileType};
+use log::{debug, trace};
 use time::Timespec;
-use tracing::{debug, trace};
 
 use std::path::Path;
 

@@ -10,7 +10,7 @@ use nix::Error;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
-use tracing::info;
+use log::info;
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);

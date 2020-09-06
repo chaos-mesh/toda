@@ -5,7 +5,7 @@ use libc::{syscall, SYS_futex, FUTEX_WAIT, FUTEX_WAKE};
 use anyhow::Result;
 use nix::Error;
 
-use tracing::{error, info};
+use log::{error, info};
 
 // Don't reuse one futex!
 pub struct Futex {
@@ -20,11 +20,11 @@ impl Futex {
     }
     pub fn wait(&self) -> Result<()> {
         let ret = unsafe { syscall(SYS_futex, self.inner.as_mut_ptr(), FUTEX_WAIT, 0, 0, 0, 0) };
-        println!("resume from futex");
+        info!("resume from futex");
 
         if ret == -1 {
             let err = Error::last();
-            println!("error while waiting for futex: {:?}", err);
+            info!("error while waiting for futex: {:?}", err);
             Err(err.into())
         } else {
             Ok(())

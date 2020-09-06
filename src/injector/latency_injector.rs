@@ -8,8 +8,8 @@ use super::injector_config::LatencyConfig;
 use super::Injector;
 use crate::hookfs::Result;
 
+use log::{debug, trace};
 use tokio::time::delay_for;
-use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub struct LatencyInjector {

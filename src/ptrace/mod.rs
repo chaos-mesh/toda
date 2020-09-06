@@ -5,7 +5,7 @@ use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{info, trace};
+use log::{info, trace};
 
 use std::cell::RefCell;
 use std::collections::HashMap;

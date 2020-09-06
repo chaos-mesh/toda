@@ -16,6 +16,7 @@ mod mount_injector;
 mod namespace;
 mod ptrace;
 mod replacer;
+mod unsafe_stdout;
 mod utils;
 
 use injector::InjectorConfig;
@@ -24,15 +25,15 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
+use flexi_logger::LogTarget;
+use log::{error, info};
 use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
-use tracing::{error, info, Level};
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(StructOpt, Debug, Clone)]
@@ -172,9 +173,12 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
-    let verbose = Level::from_str(&option.verbose)?;
-    let subscriber = tracing_subscriber::fmt().with_max_level(verbose).finish();
-    tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
+    flexi_logger::Logger::with_str(&option.verbose)
+        .log_target(LogTarget::Writer(Box::new(
+            unsafe_stdout::StdoutWriter::new(),
+        )))
+        .start()
+        .unwrap();
 
     let mount_injector = inject(option.clone())?;
 

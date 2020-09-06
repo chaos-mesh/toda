@@ -8,7 +8,7 @@ mod cwd_replacer;
 mod fd_replacer;
 mod mmap_replacer;
 
-use tracing::error;
+use log::error;
 
 pub trait Replacer {
     fn run(&mut self) -> Result<()>;
