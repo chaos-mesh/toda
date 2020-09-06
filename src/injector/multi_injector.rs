@@ -47,7 +47,7 @@ impl Injector for MultiInjector {
             injector.inject(method, path).await?
         }
 
-        return Ok(());
+        Ok(())
     }
 
     fn inject_reply(&self, method: &filter::Method, path: &Path, reply: &mut Reply) -> Result<()> {

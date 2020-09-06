@@ -40,7 +40,7 @@ impl Injector for FaultInjector {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 

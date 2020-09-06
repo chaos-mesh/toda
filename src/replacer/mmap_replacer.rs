@@ -273,7 +273,7 @@ fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
         prot,
         flags
     );
-    return (prot.bits() as u64, flags.bits() as u64);
+    (prot.bits() as u64, flags.bits() as u64)
 }
 
 pub struct MmapReplacer<'a> {

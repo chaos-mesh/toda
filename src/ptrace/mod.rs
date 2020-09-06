@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
-use nix::sys::uio::{process_vm_readv, process_vm_writev, IoVec, RemoteIoVec};
+use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
@@ -198,22 +198,6 @@ impl<'a> TracedProcess<'a> {
         )?;
 
         Ok(())
-    }
-
-    pub fn read_mem(&self, addr: u64, len: u64) -> Result<Vec<u8>> {
-        let pid = Pid::from_raw(self.pid);
-        let mut ret = Vec::new();
-
-        process_vm_readv(
-            pid,
-            &[IoVec::from_mut_slice(ret.as_mut_slice())],
-            &[RemoteIoVec {
-                base: addr as usize,
-                len: len as usize,
-            }],
-        )?;
-
-        Ok(ret)
     }
 
     pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {

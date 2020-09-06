@@ -248,7 +248,7 @@ impl AsyncFileSystemImpl for HookFs {
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
         trace!("after inject {:?}", reply);
 
-        return Ok(reply);
+        Ok(reply)
     }
 
     async fn forget(&self, _ino: u64, _nlookup: u64) {
@@ -287,11 +287,11 @@ impl AsyncFileSystemImpl for HookFs {
         size: Option<u64>,
         atime: Option<Timespec>,
         mtime: Option<Timespec>,
-        fh: Option<u64>,
-        crtime: Option<Timespec>,
-        chgtime: Option<Timespec>,
-        bkuptime: Option<Timespec>,
-        flags: Option<u32>,
+        _fh: Option<u64>,
+        _crtime: Option<Timespec>,
+        _chgtime: Option<Timespec>,
+        _bkuptime: Option<Timespec>,
+        _flags: Option<u32>,
     ) -> Result<Attr> {
         trace!("setattr");
 
@@ -568,7 +568,7 @@ impl AsyncFileSystemImpl for HookFs {
         fh: u64,
         offset: i64,
         data: Vec<u8>,
-        flags: u32,
+        _flags: u32,
     ) -> Result<Write> {
         trace!("write");
 
@@ -590,7 +590,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()> {
+    async fn flush(&self, ino: u64, fh: u64, _lock_owner: u64) -> Result<()> {
         trace!("flush");
 
         let inode_map = self.inode_map.read().await;
@@ -608,9 +608,9 @@ impl AsyncFileSystemImpl for HookFs {
         &self,
         ino: u64,
         fh: u64,
-        flags: u32,
-        lock_owner: u64,
-        flush: bool,
+        _flags: u32,
+        _lock_owner: u64,
+        _flush: bool,
     ) -> Result<()> {
         trace!("release");
 
@@ -624,7 +624,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
 
-    async fn fsync(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
+    async fn fsync(&self, ino: u64, fh: u64, _datasync: bool) -> Result<()> {
         trace!("fsync");
 
         let inode_map = self.inode_map.read().await;
@@ -756,10 +756,10 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("iterated all files");
         reply.ok();
-        return;
+        
     }
 
-    async fn releasedir(&self, ino: u64, fh: u64, flags: u32) -> Result<()> {
+    async fn releasedir(&self, ino: u64, _fh: u64, _flags: u32) -> Result<()> {
         trace!("releasedir");
 
         let inode_map = self.inode_map.read().await;
@@ -771,7 +771,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
 
-    async fn fsyncdir(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
+    async fn fsyncdir(&self, ino: u64, _fh: u64, _datasync: bool) -> Result<()> {
         debug!("unimplemented");
 
         let inode_map = self.inode_map.read().await;
@@ -814,7 +814,7 @@ impl AsyncFileSystemImpl for HookFs {
         name: OsString,
         value: Vec<u8>,
         flags: u32,
-        position: u32,
+        _position: u32,
     ) -> Result<()> {
         trace!("setxattr");
 
@@ -880,7 +880,7 @@ impl AsyncFileSystemImpl for HookFs {
         inject_reply!(self, GETXATTR, path, reply, Xattr);
         trace!("after inject {:?}", reply);
 
-        return Ok(reply);
+        Ok(reply)
     }
 
     async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
@@ -917,7 +917,7 @@ impl AsyncFileSystemImpl for HookFs {
         inject_reply!(self, LISTXATTR, path, reply, Xattr);
         trace!("after inject {:?}", reply);
 
-        return Ok(reply);
+        Ok(reply)
     }
 
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()> {
@@ -1009,7 +1009,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn getlk(
         &self,
-        ino: u64,
+        _ino: u64,
         _fh: u64,
         _lock_owner: u64,
         _start: u64,

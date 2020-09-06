@@ -27,7 +27,7 @@ impl Injector for LatencyInjector {
             debug!("latency finished");
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 

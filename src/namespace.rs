@@ -41,9 +41,9 @@ impl<R> JoinHandler<R> {
             if let Some(ret) = (&mut *ret).take() {
                 info!("clone returned {}", self.pid);
 
-                return Ok(ret);
+                Ok(ret)
             } else {
-                return Err(anyhow!("subprocess exited unexpectedly"));
+                Err(anyhow!("subprocess exited unexpectedly"))
             }
         }
     }
@@ -99,9 +99,9 @@ pub fn with_mnt_pid_namespace<F: FnOnce() -> Result<R>, R>(
         return Err(Error::last().into());
     }
 
-    return Ok(JoinHandler {
+    Ok(JoinHandler {
         pid,
         _stack: stack,
         result: ret_ptr,
-    });
+    })
 }
