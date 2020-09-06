@@ -207,19 +207,16 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
 
 #[async_trait]
 impl AsyncFileSystemImpl for HookFs {
-    #[tracing::instrument]
     fn init(&self) -> Result<()> {
         trace!("init");
 
         Ok(())
     }
 
-    #[tracing::instrument]
     fn destroy(&self) {
         trace!("destroy");
     }
 
-    #[tracing::instrument]
     async fn lookup(&self, parent: u64, name: OsString) -> Result<Entry> {
         trace!("lookup");
 
@@ -254,13 +251,11 @@ impl AsyncFileSystemImpl for HookFs {
         return Ok(reply);
     }
 
-    #[tracing::instrument]
     async fn forget(&self, _ino: u64, _nlookup: u64) {
         trace!("forget not implemented yet");
         // Maybe hookfs doesn't need forget
     }
 
-    #[tracing::instrument]
     async fn getattr(&self, ino: u64) -> Result<Attr> {
         trace!("getattr");
 
@@ -283,7 +278,6 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[tracing::instrument]
     async fn setattr(
         &self,
         ino: u64,
@@ -325,7 +319,6 @@ impl AsyncFileSystemImpl for HookFs {
         self.getattr(ino).await
     }
 
-    #[tracing::instrument]
     async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
         let inode_map = self.inode_map.read().await;
@@ -347,7 +340,6 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[tracing::instrument]
     async fn mknod(&self, parent: u64, name: OsString, mode: u32, rdev: u32) -> Result<Entry> {
         trace!("mknod");
 
@@ -368,7 +360,6 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(parent, name).await
     }
 
-    #[tracing::instrument]
     async fn mkdir(&self, parent: u64, name: OsString, mode: u32) -> Result<Entry> {
         trace!("mkdir");
 
@@ -383,7 +374,7 @@ impl AsyncFileSystemImpl for HookFs {
         async_mkdir(&path, mode).await?;
         self.lookup(parent, name).await
     }
-    #[tracing::instrument]
+
     async fn unlink(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("unlink");
 
@@ -401,7 +392,7 @@ impl AsyncFileSystemImpl for HookFs {
         async_unlink(&path).await?;
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn rmdir(&self, parent: u64, name: OsString) -> Result<()> {
         trace!("rmdir");
 
@@ -422,7 +413,7 @@ impl AsyncFileSystemImpl for HookFs {
             Ok(())
         }
     }
-    #[tracing::instrument]
+
     async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
         trace!("symlink");
 
@@ -439,7 +430,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         self.lookup(parent, name).await
     }
-    #[tracing::instrument]
+
     async fn rename(
         &self,
         parent: u64,
@@ -472,7 +463,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
         trace!("link");
         {
@@ -502,7 +493,7 @@ impl AsyncFileSystemImpl for HookFs {
         }
         self.lookup(newparent, newname).await
     }
-    #[tracing::instrument]
+
     async fn open(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("open");
         // TODO: support direct io
@@ -535,7 +526,7 @@ impl AsyncFileSystemImpl for HookFs {
         // TODO: force DIRECT_IO is not a great option
         Ok(reply)
     }
-    #[tracing::instrument]
+
     async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
         trace!("read");
 
@@ -570,7 +561,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
-    #[tracing::instrument(skip(data))]
+
     async fn write(
         &self,
         ino: u64,
@@ -598,7 +589,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
-    #[tracing::instrument]
+
     async fn flush(&self, ino: u64, fh: u64, lock_owner: u64) -> Result<()> {
         trace!("flush");
 
@@ -612,7 +603,7 @@ impl AsyncFileSystemImpl for HookFs {
         spawn_blocking(move || fsync(fd)).await??;
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn release(
         &self,
         ino: u64,
@@ -632,7 +623,7 @@ impl AsyncFileSystemImpl for HookFs {
         opened_files.remove(fh as usize);
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn fsync(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
         trace!("fsync");
 
@@ -647,7 +638,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn opendir(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("opendir");
         let inode_map = self.inode_map.read().await;
@@ -673,7 +664,6 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[tracing::instrument]
     async fn readdir(&self, ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
         trace!("readdir");
         let parent_path = {
@@ -768,7 +758,7 @@ impl AsyncFileSystemImpl for HookFs {
         reply.ok();
         return;
     }
-    #[tracing::instrument]
+
     async fn releasedir(&self, ino: u64, fh: u64, flags: u32) -> Result<()> {
         trace!("releasedir");
 
@@ -780,7 +770,7 @@ impl AsyncFileSystemImpl for HookFs {
         // self.opened_dirs.write().await.delete(fh as usize);
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn fsyncdir(&self, ino: u64, fh: u64, datasync: bool) -> Result<()> {
         debug!("unimplemented");
 
@@ -790,7 +780,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         Err(Error::Sys(Errno::ENOSYS))
     }
-    #[tracing::instrument]
+
     async fn statfs(&self, ino: u64) -> Result<StatFs> {
         trace!("statfs");
 
@@ -817,7 +807,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         Ok(reply)
     }
-    #[tracing::instrument]
+
     async fn setxattr(
         &self,
         ino: u64,
@@ -849,7 +839,7 @@ impl AsyncFileSystemImpl for HookFs {
         }
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn getxattr(&self, ino: u64, name: OsString, size: u32) -> Result<Xattr> {
         trace!("getxattr");
         let inode_map = self.inode_map.read().await;
@@ -892,7 +882,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         return Ok(reply);
     }
-    #[tracing::instrument]
+
     async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
         trace!("listxattr");
         let inode_map = self.inode_map.read().await;
@@ -929,7 +919,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         return Ok(reply);
     }
-    #[tracing::instrument]
+
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()> {
         trace!("removexattr");
         let inode_map = self.inode_map.read().await;
@@ -952,7 +942,7 @@ impl AsyncFileSystemImpl for HookFs {
         }
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn access(&self, ino: u64, mask: u32) -> Result<()> {
         trace!("access");
         let inode_map = self.inode_map.read().await;
@@ -967,7 +957,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         Ok(())
     }
-    #[tracing::instrument]
+
     async fn create(
         &self,
         parent: u64,
@@ -1016,7 +1006,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
-    #[tracing::instrument]
+
     async fn getlk(
         &self,
         ino: u64,
@@ -1031,7 +1021,7 @@ impl AsyncFileSystemImpl for HookFs {
         // kernel will implement for hookfs
         Err(Error::Sys(Errno::ENOSYS))
     }
-    #[tracing::instrument]
+
     async fn setlk(
         &self,
         _ino: u64,
@@ -1046,7 +1036,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("setlk");
         Err(Error::Sys(Errno::ENOSYS))
     }
-    #[tracing::instrument]
+
     async fn bmap(&self, _ino: u64, _blocksize: u32, _idx: u64, reply: ReplyBmap) {
         error!("unimplemented");
         reply.error(nix::libc::ENOSYS);

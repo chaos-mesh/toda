@@ -21,7 +21,6 @@ pub struct PtraceManager {
 }
 
 impl PtraceManager {
-    #[tracing::instrument]
     pub fn trace(&self, pid: i32) -> Result<TracedProcess> {
         let raw_pid = pid;
         let pid = Pid::from_raw(pid);
@@ -72,7 +71,6 @@ pub struct TracedProcess<'a> {
 }
 
 impl<'a> TracedProcess<'a> {
-    #[tracing::instrument]
     fn protect(&self) -> Result<ThreadGuard> {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
 
@@ -88,7 +86,6 @@ impl<'a> TracedProcess<'a> {
         Ok(guard)
     }
 
-    #[tracing::instrument(skip(f))]
     fn with_protect<R, F: Fn(&Self) -> Result<R>>(&self, f: F) -> Result<R> {
         let guard = self.protect()?;
 
@@ -99,7 +96,6 @@ impl<'a> TracedProcess<'a> {
         Ok(ret)
     }
 
-    #[tracing::instrument]
     fn syscall(&self, id: u64, args: &[u64]) -> Result<u64> {
         trace!("run syscall {} {:?}", id, args);
 
@@ -153,7 +149,6 @@ impl<'a> TracedProcess<'a> {
         })
     }
 
-    #[tracing::instrument]
     pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {
         let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
@@ -164,12 +159,10 @@ impl<'a> TracedProcess<'a> {
         )
     }
 
-    #[tracing::instrument]
     pub fn munmap(&self, addr: u64, len: u64) -> Result<u64> {
         self.syscall(11, &[addr, len])
     }
 
-    #[tracing::instrument(skip(f))]
     pub fn with_mmap<R, F: Fn(&Self, u64) -> Result<R>>(&self, len: u64, f: F) -> Result<R> {
         let addr = self.mmap(len, 0)?;
 
@@ -180,7 +173,6 @@ impl<'a> TracedProcess<'a> {
         Ok(ret)
     }
 
-    #[tracing::instrument(skip(filename))]
     pub fn chdir<P: AsRef<Path>>(&self, filename: P) -> Result<()> {
         let filename = CString::new(filename.as_ref().as_os_str().as_bytes())?;
         let path = filename.as_bytes_with_nul();
@@ -193,7 +185,6 @@ impl<'a> TracedProcess<'a> {
         })
     }
 
-    #[tracing::instrument]
     pub fn write_mem(&self, addr: u64, content: &[u8]) -> Result<()> {
         let pid = Pid::from_raw(self.pid);
 
@@ -209,7 +200,6 @@ impl<'a> TracedProcess<'a> {
         Ok(())
     }
 
-    #[tracing::instrument]
     pub fn read_mem(&self, addr: u64, len: u64) -> Result<Vec<u8>> {
         let pid = Pid::from_raw(self.pid);
         let mut ret = Vec::new();
@@ -226,7 +216,6 @@ impl<'a> TracedProcess<'a> {
         Ok(ret)
     }
 
-    #[tracing::instrument(skip(codes))]
     pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {
         let pid = Pid::from_raw(self.pid);
 
@@ -272,7 +261,6 @@ impl<'a> TracedProcess<'a> {
 }
 
 impl<'a> Drop for TracedProcess<'a> {
-    #[tracing::instrument]
     fn drop(&mut self) {
         info!("dropping traced process: {}", self.pid);
 

@@ -62,7 +62,6 @@ impl ProcessAccessorBuilder {
         })
     }
 
-    #[tracing::instrument(skip(self))]
     pub fn push_case(&mut self, fd: u64, new_path: PathBuf) -> anyhow::Result<()> {
         info!("push case fd: {}, new_path: {}", fd, new_path.display());
 
@@ -110,7 +109,6 @@ impl<'a> Debug for ProcessAccessor<'a> {
 }
 
 impl<'a> ProcessAccessor<'a> {
-    #[tracing::instrument]
     pub fn run(mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
 
@@ -192,7 +190,6 @@ pub struct FdReplacer<'a> {
 }
 
 impl<'a> FdReplacer<'a> {
-    #[tracing::instrument(skip(detect_path, new_path))]
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
@@ -246,7 +243,6 @@ impl<'a> FdReplacer<'a> {
 }
 
 impl<'a> Replacer for FdReplacer<'a> {
-    #[tracing::instrument(skip(self))]
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");
         for (_, accessor) in self.processes.drain() {

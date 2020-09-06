@@ -18,7 +18,6 @@ pub struct CwdReplacer<'a> {
 }
 
 impl<'a> CwdReplacer<'a> {
-    #[tracing::instrument(skip(detect_path, new_path))]
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
@@ -58,7 +57,6 @@ impl<'a> CwdReplacer<'a> {
 }
 
 impl<'a> Replacer for CwdReplacer<'a> {
-    #[tracing::instrument]
     fn run(&mut self) -> Result<()> {
         info!("running cwd replacer");
         for process in self.processes.iter() {

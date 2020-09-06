@@ -41,7 +41,6 @@ impl MountInjectionGuard {
     }
 
     // This method should be called in host namespace
-    #[tracing::instrument(skip(self))]
     pub fn recover_mount(&mut self, target_pid: i32) -> Result<()> {
         let mount_point = self.original_path.clone();
 

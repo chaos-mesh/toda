@@ -172,7 +172,6 @@ pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
     fn reply_err(self, err: libc::c_int);
 
-    #[tracing::instrument(skip(self))]
     fn reply(self, result: Result<T>) {
         match result {
             Ok(item) => {

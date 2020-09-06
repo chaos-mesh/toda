@@ -84,7 +84,6 @@ impl AttrOverrideInjector {
 
 #[async_trait]
 impl Injector for AttrOverrideInjector {
-    #[tracing::instrument]
     async fn inject(&self, _: &filter::Method, _: &Path) -> Result<()> {
         Ok(())
     }
@@ -110,7 +109,6 @@ impl Injector for AttrOverrideInjector {
 }
 
 impl AttrOverrideInjector {
-    #[tracing::instrument]
     pub fn build(conf: AttrOverrideConfig) -> anyhow::Result<Self> {
         debug!("build attr override injector");
 

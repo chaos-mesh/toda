@@ -92,7 +92,6 @@ impl ProcessAccessorBuilder {
         })
     }
 
-    #[tracing::instrument(skip(self))]
     pub fn push_case(
         &mut self,
         memory_addr: u64,
@@ -162,7 +161,6 @@ impl<'a> Debug for ProcessAccessor<'a> {
 }
 
 impl<'a> ProcessAccessor<'a> {
-    #[tracing::instrument]
     pub fn run(mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
 
@@ -251,7 +249,6 @@ impl<'a> ProcessAccessor<'a> {
     }
 }
 
-#[tracing::instrument(skip(perms))]
 fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
     let bytes = perms.as_ref().as_bytes();
     let mut prot = ProtFlags::empty();
@@ -284,7 +281,6 @@ pub struct MmapReplacer<'a> {
 }
 
 impl<'a> MmapReplacer<'a> {
-    #[tracing::instrument(skip(detect_path, new_path))]
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
@@ -356,7 +352,6 @@ impl<'a> MmapReplacer<'a> {
 }
 
 impl<'a> Replacer for MmapReplacer<'a> {
-    #[tracing::instrument(skip(self))]
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");
         for (_, accessor) in self.processes.drain() {

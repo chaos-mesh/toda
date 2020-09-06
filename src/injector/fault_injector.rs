@@ -22,7 +22,6 @@ pub struct FaultInjector {
 
 #[async_trait]
 impl Injector for FaultInjector {
-    #[tracing::instrument]
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         debug!("test filter");
         if self.filter.filter(method, path) {
@@ -46,7 +45,6 @@ impl Injector for FaultInjector {
 }
 
 impl FaultInjector {
-    #[tracing::instrument]
     pub fn build(conf: FaultsConfig) -> anyhow::Result<Self> {
         trace!("build fault injector");
 

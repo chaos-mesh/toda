@@ -96,7 +96,6 @@ pub struct Filter {
 }
 
 impl Filter {
-    #[tracing::instrument]
     pub fn build(conf: FilterConfig) -> Result<Self> {
         info!("build filter");
         let mut methods = Method::empty();
@@ -114,7 +113,7 @@ impl Filter {
             probability: conf.percent as f64 / 100f64,
         })
     }
-    #[tracing::instrument]
+
     pub fn filter(&self, method: &Method, path: &Path) -> bool {
         let mut rng = rand::thread_rng();
         let p: f64 = rng.gen();

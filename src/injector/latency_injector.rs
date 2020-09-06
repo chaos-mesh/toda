@@ -19,7 +19,6 @@ pub struct LatencyInjector {
 
 #[async_trait]
 impl Injector for LatencyInjector {
-    #[tracing::instrument]
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         trace!("test for filter");
         if self.filter.filter(method, path) {
@@ -33,7 +32,6 @@ impl Injector for LatencyInjector {
 }
 
 impl LatencyInjector {
-    #[tracing::instrument]
     pub fn build(conf: LatencyConfig) -> anyhow::Result<Self> {
         trace!("build latency injector");
 

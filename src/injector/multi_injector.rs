@@ -17,7 +17,6 @@ pub struct MultiInjector {
 }
 
 impl MultiInjector {
-    #[tracing::instrument]
     pub fn build(conf: Vec<InjectorConfig>) -> anyhow::Result<Self> {
         trace!("build multiinjectors");
         let mut injectors = Vec::new();
@@ -43,7 +42,6 @@ impl MultiInjector {
 
 #[async_trait]
 impl Injector for MultiInjector {
-    #[tracing::instrument]
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         for injector in self.injectors.iter() {
             injector.inject(method, path).await?

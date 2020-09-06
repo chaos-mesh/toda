@@ -37,7 +37,6 @@ impl HookFsError {
 }
 
 impl From<nix::Error> for HookFsError {
-    #[tracing::instrument]
     fn from(err: Error) -> HookFsError {
         // TODO: match more error types
         match err {
@@ -57,7 +56,6 @@ impl From<std::ffi::NulError> for HookFsError {
 }
 
 impl From<std::io::Error> for HookFsError {
-    #[tracing::instrument]
     fn from(err: std::io::Error) -> HookFsError {
         error!("unknown error {:?}", err);
         HookFsError::UnknownError
@@ -65,7 +63,6 @@ impl From<std::io::Error> for HookFsError {
 }
 
 impl From<tokio::task::JoinError> for HookFsError {
-    #[tracing::instrument]
     fn from(err: tokio::task::JoinError) -> HookFsError {
         error!("unknown error {:?}", err);
         HookFsError::UnknownError
