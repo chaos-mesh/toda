@@ -79,11 +79,8 @@ impl ProcessAccessorBuilder {
 
     pub fn build<'a>(
         self,
-        pid: i32,
-        ptrace_manager: &'a ptrace::PtraceManager,
+        process: ptrace::TracedProcess<'a>
     ) -> Result<ProcessAccessor<'a>> {
-        let process = ptrace_manager.trace(pid)?;
-
         Ok(ProcessAccessor {
             process,
 
@@ -299,10 +296,11 @@ impl<'a> MmapReplacer<'a> {
                 let pid = process.pid;
 
                 let maps = process.maps().ok()?;
+                let process = ptrace_manager.trace(pid).ok()?;
 
-                Some((pid, maps))
+                Some((process, maps))
             })
-            .flat_map(|(pid, maps)| {
+            .flat_map(|(process, maps)| {
                 maps.into_iter()
                     .filter_map(move |entry| {
                         match entry.pathname {
@@ -320,25 +318,28 @@ impl<'a> MmapReplacer<'a> {
                                     path,
                                     offset: entry.offset,
                                 };
-                                Some((pid, case))
+                                Some((process.clone(), case))
                             }
                             _ => None,
                         }
                     })
                     .filter(|(_, case)| case.path.starts_with(detect_path))
-                    .filter_map(|(pid, mut case)| {
+                    .filter_map(|(process, mut case)| {
                         let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
                         case.path = new_path.join(stripped_path);
-                        Some((pid, case))
+                        Some((process, case))
                     })
             })
-            .group_by(|(pid, _)| *pid)
+            .group_by(|(process, _)| process.pid)
             .into_iter()
-            .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
-            .filter_map(|(pid, group)| {
+            .filter_map(|(pid, group)| Some((ptrace_manager.trace(pid).ok()?, group)))
+            .map(|(process, group)| (process, group.map(|(_, group)| group)))
+            .filter_map(|(process, group)| {
+                let pid = process.pid;
+
                 match group
                     .collect::<ProcessAccessorBuilder>()
-                    .build(pid, ptrace_manager)
+                    .build(process)
                 {
                     Ok(accessor) => Some((pid, accessor)),
                     Err(err) => {

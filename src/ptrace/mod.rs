@@ -70,6 +70,13 @@ pub struct TracedProcess<'a> {
     manager: &'a PtraceManager,
 }
 
+impl<'a> Clone for TracedProcess<'a> {
+    fn clone(&self) -> Self {
+        // TODO: handler error here
+        self.manager.trace(self.pid).unwrap()
+    }
+}
+
 impl<'a> TracedProcess<'a> {
     fn protect(&self) -> Result<ThreadGuard> {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;

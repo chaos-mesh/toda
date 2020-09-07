@@ -49,11 +49,8 @@ impl ProcessAccessorBuilder {
 
     pub fn build<'a>(
         self,
-        pid: i32,
-        ptrace_manager: &'a ptrace::PtraceManager,
+        process: ptrace::TracedProcess<'a>,
     ) -> Result<ProcessAccessor<'a>> {
-        let process = ptrace_manager.trace(pid)?;
-
         Ok(ProcessAccessor {
             process,
 
@@ -220,10 +217,11 @@ impl<'a> FdReplacer<'a> {
                 let pid = process.pid;
 
                 let fd = process.fd().ok()?;
+                let process = ptrace_manager.trace(pid).ok()?;
 
-                Some((pid, fd))
+                Some((process, fd))
             })
-            .flat_map(|(pid, fd)| {
+            .flat_map(|(process, fd)| {
                 fd.into_iter()
                     .filter_map(|entry| match entry.target {
                         FDTarget::Path(path) => Some((entry.fd as u64, path)),
@@ -232,16 +230,18 @@ impl<'a> FdReplacer<'a> {
                     .filter(|(_, path)| path.starts_with(detect_path))
                     .filter_map(move |(fd, path)| {
                         let stripped_path = path.strip_prefix(&detect_path).ok()?;
-                        Some((pid, (fd, new_path.join(stripped_path))))
+                        Some((process.clone(), (fd, new_path.join(stripped_path))))
                     })
             })
-            .group_by(|(pid, _)| *pid)
+            .group_by(|(process, _)| process.pid)
             .into_iter()
-            .map(|(pid, group)| (pid, group.map(|(_, group)| group)))
-            .filter_map(|(pid, group)| {
+            .filter_map(|(pid, group)| Some((ptrace_manager.trace(pid).ok()?, group)))
+            .map(|(process, group)| (process, group.map(|(_, group)| group)))
+            .filter_map(|(process, group)| {
+                let pid = process.pid;
                 match group
                     .collect::<ProcessAccessorBuilder>()
-                    .build(pid, ptrace_manager)
+                    .build(process)
                 {
                     Ok(accessor) => Some((pid, accessor)),
                     Err(err) => {
