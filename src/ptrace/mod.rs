@@ -219,6 +219,9 @@ impl<'a> TracedProcess<'a> {
                 regs.rip = addr + offset;
                 ptrace::setregs(pid, regs)?;
 
+                let regs = ptrace::getregs(pid)?;
+                info!("current registers: {:?}", regs);
+
                 loop {
                     info!("run instructions");
                     ptrace::cont(pid, None)?;
