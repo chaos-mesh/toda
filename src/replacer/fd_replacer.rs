@@ -130,6 +130,8 @@ impl<'a> ProcessAccessor<'a> {
                 ; .qword cases.len() as i64
                 ; ->new_paths:
                 ; .bytes new_paths.as_slice()
+                ; nop
+                ; nop
             );
 
             trace!("static bytes placed");
