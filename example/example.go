@@ -23,7 +23,9 @@ import (
 )
 
 func main() {
-	err := ioutil.WriteFile("/mnt/test/test", []byte("HELLO WORLD000"), 0644)
+	content := make([]byte, 10)
+	content = append(content, []byte("HELLO WORLD000")...)
+	err := ioutil.WriteFile("/mnt/test/test", content, 0644)
 	if err != nil {
 		fmt.Printf("Error: %v+", err)
 		return
@@ -40,9 +42,19 @@ func main() {
 			fmt.Printf("Error: %v+", err)
 			return
 		}
+		err = f.Truncate(1024)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			continue
+		}
+		_, err = f.Seek(10, os.SEEK_SET)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			continue
+		}
 
 		fVec = append(fVec, f)
-		data, err := syscall.Mmap(int(f.Fd()), 0, originalLength+3, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+		data, err := syscall.Mmap(int(f.Fd()), 0, 10+originalLength+3, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 		if err != nil {
 			fmt.Printf("Error: %v+", err)
 			return
@@ -54,9 +66,9 @@ func main() {
 		f := fVec[i%100]
 		data := mMap[i%100]
 
-		count := strconv.Itoa(i)
+		count := strconv.Itoa(i % 100)
 		for pos, char := range count {
-			data[originalLength+pos] = byte(char)
+			data[10+originalLength+pos] = byte(char)
 		}
 
 		time.Sleep(time.Second)
@@ -68,11 +80,5 @@ func main() {
 			continue
 		}
 		fmt.Printf("%v %d bytes: %s\n", time.Now(), n, string(buf[:n]))
-
-		_, err = f.Seek(0, 0)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
-		}
 	}
 }

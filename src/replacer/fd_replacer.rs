@@ -157,15 +157,27 @@ impl<'a> ProcessAccessor<'a> {
                 ; add rdi, QWORD [r14+r15+8] // path
                 ; mov rdx, 0x0
                 ; syscall
-                ; push rax
-                ; mov rdi, rax
+                ; mov r12, rax // store newly opened fd in r12
+                // lseek
+                ; mov rax, 0x8
+                ; mov rdi, QWORD [r14+r15] // fd
+                ; mov rsi, 0
+                ; mov rdx, libc::SEEK_CUR
+                ; syscall
+                ; mov rdi, r12
+                ; mov rsi, rax
+                // lseek
+                ; mov rax, 0x8
+                ; mov rdx, libc::SEEK_SET
+                ; syscall
                 // dup2
                 ; mov rax, 0x21
+                ; mov rdi, r12
                 ; mov rsi, QWORD [r14+r15] // fd
                 ; syscall
                 // close
                 ; mov rax, 0x3
-                ; pop rdi
+                ; mov rdi, r12
                 ; syscall
 
                 ; add r15, std::mem::size_of::<ReplaceCase>() as i32
