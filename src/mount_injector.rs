@@ -15,8 +15,6 @@ use nix::mount::umount;
 
 use log::{error, info};
 
-use libc::sleep;
-
 #[derive(Debug)]
 pub struct MountInjector {
     original_path: PathBuf,
@@ -55,10 +53,7 @@ impl MountInjectionGuard {
                         info!("umount returns error: {:?}", err);
                     }
 
-                    // TODO: sleep for shorter time
-                    unsafe {
-                        sleep(1);
-                    }
+                    std::thread::sleep(std::time::Duration::from_micros(10));
                 }
 
                 info!("umount successfully");
