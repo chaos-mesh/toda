@@ -179,15 +179,6 @@ impl<'a> ProcessAccessor<'a> {
 
             let instructions = vec_rt.finalize()?;
 
-            let mut log_file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open("/code.log")?;
-            log_file.write_all(&instructions[replace.0..])?;
-            trace!("write file to /code.log");
-
             Ok((replace.0 as u64, instructions))
         })?;
 
