@@ -295,10 +295,10 @@ impl<'a> MmapReplacer<'a> {
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
 
+                let traced_process = ptrace_manager.trace(pid).ok()?;
                 let maps = process.maps().ok()?;
-                let process = ptrace_manager.trace(pid).ok()?;
 
-                Some((process, maps))
+                Some((traced_process, maps))
             })
             .flat_map(|(process, maps)| {
                 maps.into_iter()

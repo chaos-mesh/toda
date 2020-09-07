@@ -216,10 +216,10 @@ impl<'a> FdReplacer<'a> {
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
 
+                let traced_process = ptrace_manager.trace(pid).ok()?;
                 let fd = process.fd().ok()?;
-                let process = ptrace_manager.trace(pid).ok()?;
 
-                Some((process, fd))
+                Some((traced_process, fd))
             })
             .flat_map(|(process, fd)| {
                 fd.into_iter()
