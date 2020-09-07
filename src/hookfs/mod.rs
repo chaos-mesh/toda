@@ -756,7 +756,6 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("iterated all files");
         reply.ok();
-        
     }
 
     async fn releasedir(&self, ino: u64, _fh: u64, _flags: u32) -> Result<()> {

@@ -228,11 +228,11 @@ impl<'a> TracedProcess<'a> {
                     info!("wait status: {:?}", status);
 
                     use nix::sys::signal::SIGTRAP;
+                    let regs = ptrace::getregs(pid)?;
+
+                    info!("current registers: {:?}", regs);
                     match status {
                         wait::WaitStatus::Stopped(_, SIGTRAP) => {
-                            let regs = ptrace::getregs(pid)?;
-                            info!("current rip: {:X}", regs.rip);
-
                             break;
                         }
                         _ => info!("continue running replacers"),
