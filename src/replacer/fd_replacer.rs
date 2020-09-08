@@ -229,6 +229,7 @@ impl<'a> FdReplacer<'a> {
                     })
                     .filter(|(_, path)| path.starts_with(detect_path))
                     .filter_map(move |(fd, path)| {
+                        trace!("replace fd({}): {}", fd, path.display());
                         let stripped_path = path.strip_prefix(&detect_path).ok()?;
                         Some((process.clone(), (fd, new_path.join(stripped_path))))
                     })

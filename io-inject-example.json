@@ -1,17 +1,17 @@
 [
     {
         "type": "latency",
-        "path": "/mnt/test/*",
+        "path": "/var/run/test/*",
         "methods": [
             "read",
             "write"
         ],
         "percent": 100,
-        "latency": "500ms"
+        "latency": "1s"
     },
     {
         "type": "latency",
-        "path": "/mnt/test/latency/*",
+        "path": "/var/run/test/latency/*",
         "methods": [
             "getattr"
         ],
@@ -20,7 +20,7 @@
     },
     {
         "type": "fault",
-        "path": "/mnt/test/*",
+        "path": "/var/run/test/*",
         "methods": [
             "read",
 	    "write"
@@ -39,7 +39,7 @@
     },
     {
         "type": "attrOverride",
-        "path": "/mnt/test/attr/*",
+        "path": "/var/run/test/attr/*",
         "percent": 100,
         "mtime": {
             "sec": 0,

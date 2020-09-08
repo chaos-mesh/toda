@@ -64,6 +64,8 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
 
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
+            info!("canonicalizing path {}", path.display());
+            let path = path.canonicalize()?;
             let ptrace_manager = ptrace::PtraceManager::default();
 
             let mut replacer = UnionReplacer::new();
@@ -117,6 +119,8 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     let cloned_after_recover_mount = after_recover_mount.clone();
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
+            info!("canonicalizing path {}", path.display());
+            let path = path.canonicalize()?;
             let (_, new_path) = encode_path(&path)?;
 
             let ptrace_manager = ptrace::PtraceManager::default();

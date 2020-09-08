@@ -25,7 +25,7 @@ import (
 func main() {
 	content := make([]byte, 10)
 	content = append(content, []byte("HELLO WORLD000")...)
-	err := ioutil.WriteFile("/mnt/test/test", content, 0644)
+	err := ioutil.WriteFile("/var/run/test/test", content, 0644)
 	if err != nil {
 		fmt.Printf("Error: %v+", err)
 		return
@@ -36,8 +36,8 @@ func main() {
 	var fVec []*os.File
 	var mMap [][]byte
 
-	for i := 0; i < 100; i++ {
-		f, err := os.OpenFile("/mnt/test/test", os.O_RDWR, 0666)
+	for i := 0; ; i++ {
+		f, err := os.OpenFile("/var/run/test/test", os.O_RDWR, 0666)
 		if err != nil {
 			fmt.Printf("Error: %v+", err)
 			return
@@ -60,13 +60,11 @@ func main() {
 			return
 		}
 		mMap = append(mMap, data)
-	}
 
-	for i := 0; ; i++ {
-		f := fVec[i%100]
-		data := mMap[i%100]
+		f = fVec[i]
+		data = mMap[i]
 
-		count := strconv.Itoa(i % 100)
+		count := strconv.Itoa(i)
 		for pos, char := range count {
 			data[10+originalLength+pos] = byte(char)
 		}
