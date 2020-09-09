@@ -259,10 +259,13 @@ impl AsyncFileSystemImpl for HookFs {
     async fn getattr(&self, ino: u64) -> Result<Attr> {
         trace!("getattr");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
+       
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
         trace!("getting attr from path {}", path.display());
-        inject!(self, GETATTR, path);
+        inject!(self, GETATTR, &path);
 
         let stat = async_stat(&path)
             .await
@@ -295,25 +298,28 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<Attr> {
         trace!("setattr");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, SETATTR, path);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, SETATTR, &path);
 
-        async_chown(path, uid, gid).await?;
+        async_chown(&path, uid, gid).await?;
 
         if let Some(mode) = mode {
-            async_fchmodat(path, mode).await?;
+            async_fchmodat(&path, mode).await?;
         }
 
         if let Some(size) = size {
-            async_truncate(path, size as i64).await?;
+            async_truncate(&path, size as i64).await?;
         }
 
         if let (Some(atime), Some(mtime)) = (atime, mtime) {
             let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
             let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
             // TODO: check whether one of them is Some
-            async_utimes(path, atime, mtime).await?;
+            async_utimes(&path, atime, mtime).await?;
         }
 
         self.getattr(ino).await
@@ -321,11 +327,14 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
-        let inode_map = self.inode_map.read().await;
-        let link_path = inode_map.get_path(ino)?;
-        inject!(self, READLINK, link_path);
+        
+        let link_path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, READLINK, &link_path);
 
-        let path = async_readlink(link_path).await?;
+        let path = async_readlink(&link_path).await?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
@@ -334,7 +343,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut reply = Data::new(path.into_bytes());
         trace!("before inject {:?}", reply);
-        inject_reply!(self, READLINK, link_path, reply, Data);
+        inject_reply!(self, READLINK, &link_path, reply, Data);
         trace!("after inject {:?}", reply);
 
         Ok(reply)
@@ -467,10 +476,13 @@ impl AsyncFileSystemImpl for HookFs {
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
         trace!("link");
         {
-            let inode_map = self.inode_map.read().await;
-            let original_path = inode_map.get_path(ino)?.to_path_buf();
+            
+            let (original_path, new_parent_path) = {
+                let inode_map = self.inode_map.read().await;
+                (inode_map.get_path(ino)?.to_path_buf().to_owned(),
+                inode_map.get_path(newparent)?.to_owned())
+            };
 
-            let new_parent_path = inode_map.get_path(newparent)?;
             let new_path = new_parent_path.join(&newname);
             inject!(self, LINK, new_path.as_path());
 
@@ -505,13 +517,15 @@ impl AsyncFileSystemImpl for HookFs {
         let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!(libc::O_DIRECT as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, OPEN, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, OPEN, &path);
 
         trace!("open with flags: {:?}", filtered_flags);
 
-        let fd = async_open(path, filtered_flags, stat::Mode::S_IRWXU).await?;
+        let fd = async_open(&path, filtered_flags, stat::Mode::S_IRWXU).await?;
 
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);
@@ -530,9 +544,11 @@ impl AsyncFileSystemImpl for HookFs {
     async fn read(&self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
         trace!("read");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, READ, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, READ, &path);
 
         let mut opened_files = self.opened_files.write().await;
         let file = opened_files.get_mut(fh as usize)?;
@@ -557,7 +573,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut reply = Data::new(buf);
         trace!("before inject {:?}", reply);
-        inject_reply!(self, READ, path, reply, Data);
+        inject_reply!(self, READ, &path, reply, Data);
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
@@ -572,9 +588,11 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<Write> {
         trace!("write");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, WRITE, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, WRITE, &path);
 
         let mut opened_files = self.opened_files.write().await;
         let file = opened_files.get_mut(fh as usize)?;
@@ -585,7 +603,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut reply = Write::new(data.len() as u32);
         trace!("before inject {:?}", reply);
-        inject_reply!(self, WRITE, path, reply, Write);
+        inject_reply!(self, WRITE, &path, reply, Write);
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
@@ -593,13 +611,18 @@ impl AsyncFileSystemImpl for HookFs {
     async fn flush(&self, ino: u64, fh: u64, _lock_owner: u64) -> Result<()> {
         trace!("flush");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
         inject!(self, FLUSH, path);
 
         // flush is implemented with fsync. Is it the correct way?
-        let opened_files = self.opened_files.read().await;
-        let fd: RawFd = opened_files.get(fh as usize)?.as_raw_fd();
+        let fd: RawFd = {
+            let opened_files = self.opened_files.read().await;
+            opened_files.get(fh as usize)?.as_raw_fd()
+        };
         spawn_blocking(move || fsync(fd)).await??;
         Ok(())
     }
@@ -614,8 +637,11 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<()> {
         trace!("release");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
         inject!(self, RELEASE, path);
 
         // FIXME: implement release
@@ -627,12 +653,17 @@ impl AsyncFileSystemImpl for HookFs {
     async fn fsync(&self, ino: u64, fh: u64, _datasync: bool) -> Result<()> {
         trace!("fsync");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
         inject!(self, FSYNC, path);
 
-        let opened_files = self.opened_files.read().await;
-        let fd: RawFd = opened_files.get(fh as usize)?.as_raw_fd();
+        let fd: RawFd = {
+            let opened_files = self.opened_files.read().await;
+            opened_files.get(fh as usize)?.as_raw_fd()
+        };
 
         spawn_blocking(move || fsync(fd)).await??;
 
@@ -641,14 +672,17 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn opendir(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("opendir");
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, OPENDIR, path);
+        
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, OPENDIR, &path);
 
         let filtered_flags = flags & (!(libc::O_APPEND as u32));
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
-        let path_clone = path.to_path_buf();
+        let path_clone = path.clone();
         let dir = spawn_blocking(move || {
             dir::Dir::open(&path_clone, filtered_flags, stat::Mode::S_IRWXU)
         })
@@ -659,7 +693,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut reply = Open::new(fh, flags);
         trace!("before inject {:?}", reply);
-        inject_reply!(self, OPENDIR, path, reply, Open);
+        inject_reply!(self, OPENDIR, &path, reply, Open);
         trace!("after inject {:?}", reply);
         Ok(reply)
     }
@@ -695,17 +729,20 @@ impl AsyncFileSystemImpl for HookFs {
         }
         let offset = offset as usize;
 
-        let mut opened_dirs = self.opened_dirs.write().await;
-        let dir = match opened_dirs.get_mut(fh as usize) {
-            Ok(dir) => dir,
-            Err(err) => {
-                reply.error(err.into());
-                return;
-            }
-        };
+        
 
         // TODO: optimize the implementation
-        let all_entries: Vec<_> = dir.iter().collect();
+        let all_entries: Vec<_> = {
+            let mut opened_dirs = self.opened_dirs.write().await;
+            let dir = match opened_dirs.get_mut(fh as usize) {
+                Ok(dir) => dir,
+                Err(err) => {
+                    reply.error(err.into());
+                    return;
+                }
+            };
+            dir.iter().collect()
+        };
         if offset >= all_entries.len() {
             trace!("empty reply");
             reply.ok();
@@ -761,9 +798,11 @@ impl AsyncFileSystemImpl for HookFs {
     async fn releasedir(&self, ino: u64, _fh: u64, _flags: u32) -> Result<()> {
         trace!("releasedir");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, RELEASEDIR, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, RELEASEDIR, &path);
 
         // FIXME: please implement releasedir
         // self.opened_dirs.write().await.delete(fh as usize);
@@ -773,8 +812,10 @@ impl AsyncFileSystemImpl for HookFs {
     async fn fsyncdir(&self, ino: u64, _fh: u64, _datasync: bool) -> Result<()> {
         debug!("unimplemented");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
         inject!(self, FSYNCDIR, path);
 
         Err(Error::Sys(Errno::ENOSYS))
@@ -783,9 +824,11 @@ impl AsyncFileSystemImpl for HookFs {
     async fn statfs(&self, ino: u64) -> Result<StatFs> {
         trace!("statfs");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, STATFS, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, STATFS, &path);
 
         let origin_path = self.original_path.clone();
         let stat = spawn_blocking(move || statfs::statfs(&origin_path)).await??;
@@ -801,7 +844,7 @@ impl AsyncFileSystemImpl for HookFs {
             stat.block_size() as u32,
         );
         trace!("before inject {:?}", reply);
-        inject_reply!(self, STATFS, path, reply, StatFs);
+        inject_reply!(self, STATFS, &path, reply, StatFs);
         trace!("after inject {:?}", reply);
 
         Ok(reply)
@@ -817,9 +860,11 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<()> {
         trace!("setxattr");
 
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, SETXATTR, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, SETXATTR, &path);
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
@@ -884,9 +929,11 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn listxattr(&self, ino: u64, size: u32) -> Result<Xattr> {
         trace!("listxattr");
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, LISTXATTR, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, LISTXATTR, &path);
 
         let cpath = CString::new(path.as_os_str().as_bytes())?;
 
@@ -921,9 +968,11 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn removexattr(&self, ino: u64, name: OsString) -> Result<()> {
         trace!("removexattr");
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, REMOVEXATTR, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, REMOVEXATTR, &path);
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
@@ -944,9 +993,11 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn access(&self, ino: u64, mask: u32) -> Result<()> {
         trace!("access");
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        inject!(self, ACCESS, path);
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        inject!(self, ACCESS, &path);
 
         let mask = AccessFlags::from_bits_truncate(mask as i32);
 
