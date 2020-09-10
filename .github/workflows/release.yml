@@ -15,7 +15,7 @@ jobs:
       - name: Build
         run: |
           make release
-          tar -czvf /toda.tar.gz ./toda
+          tar -czvf ./toda.tar.gz ./toda
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -33,6 +33,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }} 
-          asset_path: /toda.tar.gz
+          asset_path: ./toda.tar.gz
           asset_name: toda-linux-amd64.tar.gz
           asset_content_type: application/zip
