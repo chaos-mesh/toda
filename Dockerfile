@@ -1,26 +1,33 @@
 # syntax=docker/dockerfile:experimental
 
-FROM ubuntu:20.04
+FROM debian:buster-slim
+
+ENV DEBIAN_FRONTEND noninteractive
 
 ARG HTTPS_PROXY
 ARG HTTP_PROXY
 
-ENV DEBIAN_FRONTEND noninteractive
+ENV http_proxy $HTTP_PROXY
+ENV https_proxy $HTTPS_PROXY
 
-RUN apt-get update
-RUN apt-get install libfuse-dev pkg-config fuse curl build-essential -y
-RUN apt-get install gdb vim -y
+RUN apt-get update && apt-get install build-essential curl git pkg-config libfuse-dev fuse -y && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly-2020-07-01 -y
 ENV PATH "/root/.cargo/bin:${PATH}"
-ENV RUSTFLAGS "-Z relro-level=full" 
+
+RUN if [ -n "$HTTP_PROXY" ]; then echo "[http]\n\
+proxy = \"${HTTP_PROXY}\"\n\
+"\
+> /root/.cargo/config ; fi
+
+COPY . /toda-build
 
 WORKDIR /toda-build
 
-COPY . .
+ENV RUSTFLAGS "-Z relro-level=full"
+RUN --mount=type=cache,target=/toda-build/target \
+    --mount=type=cache,target=/root/.cargo/registry \
+    cargo build --release
 
 RUN --mount=type=cache,target=/toda-build/target \
-    cargo build
-
-RUN --mount=type=cache,target=/toda-build/target \
-    cp /toda-build/target/debug/toda /toda
+    cp /toda-build/target/release/toda /toda

@@ -10,5 +10,8 @@ example: example-image volume
 example-inject:debug-toda
 	cat ./io-inject-example.json|sudo -E ./target/debug/toda --path /var/run/test --pid $$(pgrep main-app) --verbose trace
 
+image-toda:
+	docker build --build-arg HTTP_PROXY=${HTTP_PROXY} --build-arg HTTPS_PROXY=${HTTPS_PROXY} . -t chaos-mesh/toda 
+
 debug-toda:
 	RUSTFLAGS="-Z relro-level=full" cargo build
