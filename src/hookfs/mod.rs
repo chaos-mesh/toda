@@ -479,7 +479,7 @@ impl AsyncFileSystemImpl for HookFs {
             
             let (original_path, new_parent_path) = {
                 let inode_map = self.inode_map.read().await;
-                (inode_map.get_path(ino)?.to_path_buf().to_owned(),
+                (inode_map.get_path(ino)?.to_owned(),
                 inode_map.get_path(newparent)?.to_owned())
             };
 
