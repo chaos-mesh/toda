@@ -1,11 +1,8 @@
 [
     {
         "type": "latency",
-        "path": "/var/run/test/*",
-        "methods": [
-            "read",
-            "write"
-        ],
+        "path": "",
+        "methods": [],
         "percent": 100,
         "latency": "1s"
     },

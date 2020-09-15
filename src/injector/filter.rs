@@ -98,19 +98,21 @@ pub struct Filter {
 impl Filter {
     pub fn build(conf: FilterConfig) -> Result<Self> {
         info!("build filter");
-        let mut methods = Method::empty();
-        if let Some(conf_methods) = conf.methods {
-            for method in conf_methods.iter() {
-                methods |= Method::try_from(method.as_str())?;
-            }
-        } else {
-            methods = Method::all()
-        }
+        let methods = conf
+            .methods
+            .filter(|methods| !methods.is_empty())
+            .map(|methods| {
+                methods
+                    .iter()
+                    .filter_map(|method| Method::try_from(method.as_str()).ok())
+                    .fold(Method::empty(), |methods, method| methods | method)
+            })
+            .unwrap_or(Method::all());
 
         let path_filter = conf
             .path
             .map(|path| -> Option<Pattern> {
-                if path.len() > 0 {
+                if !path.is_empty() {
                     Pattern::new(&path).ok()
                 } else {
                     None
