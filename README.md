@@ -1,4 +1,6 @@
 ## Notes:
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda?ref=badge_shield)
+
 
 * Keep in mind that the result will be cached by system!
 
@@ -7,3 +9,6 @@
   But if you set probability == 1, which means the result will be the same all the time during the mount, there will be no problem.
 
 * Compile this binary with `-Z relro-level=full`, then it will load (mmap) all dependencies into memory at the beginning.
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda?ref=badge_large)
