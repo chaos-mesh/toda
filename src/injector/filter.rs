@@ -90,7 +90,7 @@ impl TryFrom<&str> for Method {
 
 #[derive(Debug)]
 pub struct Filter {
-    path_filter: Pattern,
+    path_filter: Option<Pattern>,
     methods: Method,
     probability: f64,
 }
@@ -107,8 +107,18 @@ impl Filter {
             methods = Method::all()
         }
 
+        let path_filter = conf
+            .path
+            .map(|path| -> Option<Pattern> {
+                if path.len() > 0 {
+                    Pattern::new(&path).ok()
+                } else {
+                    None
+                }
+            })
+            .flatten();
         Ok(Self {
-            path_filter: Pattern::new(&conf.path)?,
+            path_filter,
             methods,
             probability: conf.percent as f64 / 100f64,
         })
@@ -118,14 +128,17 @@ impl Filter {
         let mut rng = rand::thread_rng();
         let p: f64 = rng.gen();
 
-        let match_path = self.path_filter.matches_path_with(
-            path,
-            MatchOptions {
-                case_sensitive: true,
-                require_literal_separator: true,
-                require_literal_leading_dot: false,
-            },
-        );
+        let match_path = match &self.path_filter {
+            Some(filter) => filter.matches_path_with(
+                path,
+                MatchOptions {
+                    case_sensitive: true,
+                    require_literal_separator: true,
+                    require_literal_leading_dot: false,
+                },
+            ),
+            None => true,
+        };
         let match_method = !(self.methods & *method).is_empty();
         let match_probability = p < self.probability;
         trace!("path filter: {}", match_path);

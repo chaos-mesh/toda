@@ -77,10 +77,7 @@ impl ProcessAccessorBuilder {
         }
     }
 
-    pub fn build<'a>(
-        self,
-        process: ptrace::TracedProcess<'a>
-    ) -> Result<ProcessAccessor<'a>> {
+    pub fn build<'a>(self, process: ptrace::TracedProcess<'a>) -> Result<ProcessAccessor<'a>> {
         Ok(ProcessAccessor {
             process,
 
@@ -337,10 +334,7 @@ impl<'a> MmapReplacer<'a> {
             .filter_map(|(process, group)| {
                 let pid = process.pid;
 
-                match group
-                    .collect::<ProcessAccessorBuilder>()
-                    .build(process)
-                {
+                match group.collect::<ProcessAccessorBuilder>().build(process) {
                     Ok(accessor) => Some((pid, accessor)),
                     Err(err) => {
                         error!("fail to build accessor: {:?}", err);

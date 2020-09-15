@@ -259,7 +259,6 @@ impl AsyncFileSystemImpl for HookFs {
     async fn getattr(&self, ino: u64) -> Result<Attr> {
         trace!("getattr");
 
-       
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -298,7 +297,6 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<Attr> {
         trace!("setattr");
 
-        
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -327,7 +325,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn readlink(&self, ino: u64) -> Result<Data> {
         trace!("readlink");
-        
+
         let link_path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -476,11 +474,12 @@ impl AsyncFileSystemImpl for HookFs {
     async fn link(&self, ino: u64, newparent: u64, newname: OsString) -> Result<Entry> {
         trace!("link");
         {
-            
             let (original_path, new_parent_path) = {
                 let inode_map = self.inode_map.read().await;
-                (inode_map.get_path(ino)?.to_owned(),
-                inode_map.get_path(newparent)?.to_owned())
+                (
+                    inode_map.get_path(ino)?.to_owned(),
+                    inode_map.get_path(newparent)?.to_owned(),
+                )
             };
 
             let new_path = new_parent_path.join(&newname);
@@ -611,7 +610,6 @@ impl AsyncFileSystemImpl for HookFs {
     async fn flush(&self, ino: u64, fh: u64, _lock_owner: u64) -> Result<()> {
         trace!("flush");
 
-        
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -637,7 +635,6 @@ impl AsyncFileSystemImpl for HookFs {
     ) -> Result<()> {
         trace!("release");
 
-        
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -653,7 +650,6 @@ impl AsyncFileSystemImpl for HookFs {
     async fn fsync(&self, ino: u64, fh: u64, _datasync: bool) -> Result<()> {
         trace!("fsync");
 
-        
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -672,7 +668,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn opendir(&self, ino: u64, flags: u32) -> Result<Open> {
         trace!("opendir");
-        
+
         let path = {
             let inode_map = self.inode_map.read().await;
             inode_map.get_path(ino)?.to_owned()
@@ -728,8 +724,6 @@ impl AsyncFileSystemImpl for HookFs {
             return;
         }
         let offset = offset as usize;
-
-        
 
         // TODO: optimize the implementation
         let all_entries: Vec<_> = {

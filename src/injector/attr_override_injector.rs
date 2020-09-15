@@ -121,7 +121,7 @@ impl AttrOverrideInjector {
             String::from("link"),
         ];
         let filter = filter::Filter::build(FilterConfig {
-            path: conf.path,
+            path: Some(conf.path),
             methods: Some(methods),
             percent: conf.percent,
         })?;

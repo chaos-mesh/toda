@@ -32,7 +32,7 @@ pub struct FaultsConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterConfig {
-    pub path: String,
+    pub path: Option<String>,
     pub methods: Option<Vec<String>>,
     pub percent: i32,
 }
