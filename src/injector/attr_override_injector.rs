@@ -114,7 +114,6 @@ impl AttrOverrideInjector {
 
         let methods = vec![
             String::from("getattr"),
-            String::from("lookup"),
             String::from("mknod"),
             String::from("mkdir"),
             String::from("symlink"),

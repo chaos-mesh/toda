@@ -1,47 +1,8 @@
 [
     {
-        "type": "latency",
-        "path": "",
-        "methods": [],
-        "percent": 100,
-        "latency": "1s"
-    },
-    {
-        "type": "latency",
-        "path": "/var/run/test/latency/*",
-        "methods": [
-            "getattr"
-        ],
-        "percent": 0,
-        "latency": "5s"
-    },
-    {
-        "type": "fault",
-        "path": "/var/run/test/*",
-        "methods": [
-            "read",
-	    "write"
-        ],
-        "percent": 0,
-        "faults": [
-            {
-                "errno": 1,
-                "weight": 1
-            },
-            {
-                "errno": 5,
-                "weight": 1
-            }
-        ]
-    },
-    {
         "type": "attrOverride",
-        "path": "/var/run/test/attr/*",
+        "path": "/var/run/test/*",
         "percent": 100,
-        "mtime": {
-            "sec": 0,
-            "nsec": 0
-        },
-        "perm": 40
+        "ino": 5
     }
 ]
