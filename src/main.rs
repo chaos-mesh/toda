@@ -34,7 +34,6 @@ use structopt::StructOpt;
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -57,10 +56,8 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     let path = option.path.clone();
     let fuse_dev = fuse_device::read_fuse_dev_t()?;
 
-    let before_mount = Arc::new(futex::Futex::new());
-    let after_mount = Arc::new(futex::Futex::new());
-    let cloned_before_mount = before_mount.clone();
-    let cloned_after_mount = after_mount.clone();
+    let (before_mount_waiter, before_mount_guard) = futex::lock();
+    let (after_mount_waiter, after_mount_guard) = futex::lock();
 
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
@@ -76,9 +73,9 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
             }
 
             info!("wakeup host process to mount");
-            cloned_before_mount.wake(1)?;
+            drop(before_mount_guard);
             info!("wait for mount");
-            cloned_after_mount.wait()?;
+            after_mount_waiter.wait()?;
             info!("mounted successfully a\nd resume from waiting");
 
             // At this time, `mount --move` has already been executed.
@@ -92,12 +89,12 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
         option.pid,
     )?;
 
-    before_mount.wait()?;
+    before_mount_waiter.wait()?;
 
     let mut injection = MountInjector::create_injection(&option.path, injector_config)?;
     let mount_guard = injection.mount(option.pid)?;
 
-    after_mount.wake(1)?;
+    drop(after_mount_guard);
 
     handler.join()??;
     info!("enable injection");
@@ -113,10 +110,8 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
 
     let pid = option.pid;
 
-    let before_recover_mount = Arc::new(futex::Futex::new());
-    let after_recover_mount = Arc::new(futex::Futex::new());
-    let cloned_before_recover_mount = before_recover_mount.clone();
-    let cloned_after_recover_mount = after_recover_mount.clone();
+    let (before_recover_waiter, before_recover_guard) = futex::lock();
+    let (after_recover_waiter, after_recover_guard) = futex::lock();
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
             info!("canonicalizing path {}", path.display());
@@ -130,8 +125,8 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
             info!("running replacer");
             replacer.run()?;
 
-            cloned_before_recover_mount.wake(1)?;
-            cloned_after_recover_mount.wait()?;
+            drop(before_recover_guard);
+            after_recover_waiter.wait()?;
 
             drop(replacer);
             info!("replacers detached");
@@ -141,10 +136,10 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
         pid,
     )?;
 
-    before_recover_mount.wait()?;
+    before_recover_waiter.wait()?;
     info!("recovering mount");
     mount_guard.recover_mount(option.pid)?;
-    after_recover_mount.wake(1)?;
+    drop(after_recover_guard);
 
     if let Err(err) = handler.join()? {
         error!("join error: {:?}", err);
