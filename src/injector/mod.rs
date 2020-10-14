@@ -28,5 +28,5 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
-    fn inject_attr(&self, attr: &mut FileAttr, path: &Path) {}
+    fn inject_attr(&self, _attr: &mut FileAttr, _path: &Path) {}
 }

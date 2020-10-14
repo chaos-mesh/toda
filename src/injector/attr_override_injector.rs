@@ -2,7 +2,7 @@ use super::filter;
 use super::Injector;
 
 use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, FilterConfig};
-use crate::hookfs::{Reply, Result};
+use crate::hookfs::Result;
 
 use async_trait::async_trait;
 use fuse::{FileAttr, FileType};
