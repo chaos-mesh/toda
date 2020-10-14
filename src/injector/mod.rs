@@ -11,6 +11,7 @@ pub use multi_injector::MultiInjector;
 
 use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
+use fuse::FileAttr;
 
 use std::path::Path;
 
@@ -26,4 +27,6 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
     ) -> Result<()> {
         Ok(())
     }
+
+    fn inject_attr(&self, attr: &mut FileAttr, path: &Path) {}
 }

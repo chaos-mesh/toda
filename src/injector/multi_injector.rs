@@ -8,6 +8,7 @@ use crate::hookfs::{Reply, Result};
 
 use async_trait::async_trait;
 use log::trace;
+use fuse::FileAttr;
 
 use std::path::Path;
 
@@ -56,5 +57,11 @@ impl Injector for MultiInjector {
         }
 
         Ok(())
+    }
+
+    fn inject_attr(&self, attr: &mut FileAttr, path: &Path) {
+        for injector in self.injectors.iter() {
+            injector.inject_attr(attr, path)
+        }
     }
 }

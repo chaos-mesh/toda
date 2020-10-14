@@ -29,8 +29,18 @@ pub struct AttrOverrideInjector {
     rdev: Option<u32>,
 }
 
-impl AttrOverrideInjector {
-    fn inject_attr(&self, attr: &mut FileAttr) {
+#[async_trait]
+impl Injector for AttrOverrideInjector {
+    async fn inject(&self, _: &filter::Method, _: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn inject_attr(&self, attr: &mut FileAttr, path: &Path) {
+        // AttrOverrideInjector should always pass method filter
+        if !self.filter.filter(&filter::Method::LOOKUP, path) {
+            return;
+        }
+
         if let Some(ino) = self.ino {
             trace!("overriding ino");
             attr.ino = ino
@@ -82,46 +92,13 @@ impl AttrOverrideInjector {
     }
 }
 
-#[async_trait]
-impl Injector for AttrOverrideInjector {
-    async fn inject(&self, _: &filter::Method, _: &Path) -> Result<()> {
-        Ok(())
-    }
-    fn inject_reply(&self, method: &filter::Method, path: &Path, reply: &mut Reply) -> Result<()> {
-        if !self.filter.filter(method, path) {
-            return Ok(());
-        }
-
-        debug!("overriding attributes");
-        match reply {
-            Reply::Entry(entry) => {
-                self.inject_attr(&mut entry.stat);
-            }
-            Reply::Attr(attr) => {
-                self.inject_attr(&mut attr.attr);
-            }
-            _ => {
-                debug!("reply without attributes");
-            }
-        }
-        Ok(())
-    }
-}
-
 impl AttrOverrideInjector {
     pub fn build(conf: AttrOverrideConfig) -> anyhow::Result<Self> {
         debug!("build attr override injector");
 
-        let methods = vec![
-            String::from("getattr"),
-            String::from("mknod"),
-            String::from("mkdir"),
-            String::from("symlink"),
-            String::from("link"),
-        ];
         let filter = filter::Filter::build(FilterConfig {
             path: Some(conf.path),
-            methods: Some(methods),
+            methods: None,
             percent: conf.percent,
         })?;
 

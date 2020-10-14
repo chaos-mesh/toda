@@ -1,7 +1,7 @@
 [
     {
         "type": "attrOverride",
-        "path": "/var/run/test/*",
+        "path": "/var/run/test/qqqqq",
         "percent": 100,
         "ino": 5
     }

@@ -60,6 +60,16 @@ macro_rules! inject {
     };
 }
 
+macro_rules! inject_attr {
+    ($self:ident, $attr:ident, $path:expr) => {
+        if $self.enable_injection.load(Ordering::SeqCst) {
+            $self
+                .injector
+                .inject_attr(&mut $attr, $self.rebuild_path($path)?.as_path());
+        }
+    };
+}
+
 macro_rules! inject_reply {
     ($self:ident, $method:ident, $path:expr, $reply:ident, $reply_typ:ident) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
@@ -205,6 +215,20 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
     })
 }
 
+impl HookFs {
+    async fn get_file_attr(&self, path: &Path) -> Result<FileAttr> {
+        let mut attr = async_stat(&path)
+            .await
+            .map(convert_libc_stat_to_fuse_stat)??;
+
+        trace!("before inject attr {:?}", &attr);
+        inject_attr!(self, attr, path);
+        trace!("after inject attr {:?}", &attr);
+
+        Ok(attr)
+    }
+}
+
 #[async_trait]
 impl AsyncFileSystemImpl for HookFs {
     fn init(&self) -> Result<()> {
@@ -229,9 +253,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         inject!(self, LOOKUP, path.as_path());
 
-        let stat = async_stat(&path)
-            .await
-            .map(convert_libc_stat_to_fuse_stat)??;
+        let stat = self.get_file_attr(&path).await?;
 
         trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
         self.inode_map
@@ -266,9 +288,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("getting attr from path {}", path.display());
         inject!(self, GETATTR, &path);
 
-        let stat = async_stat(&path)
-            .await
-            .map(convert_libc_stat_to_fuse_stat)??;
+        let stat = self.get_file_attr(&path).await?;
 
         trace!("return with {:?}", stat);
 
@@ -392,8 +412,8 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, UNLINK, path.as_path());
 
-        let stat = async_stat(&path).await?;
-        self.inode_map.write().await.remove(&stat.st_ino);
+        let stat = self.get_file_attr(&path).await?;
+        self.inode_map.write().await.remove(&stat.ino);
 
         trace!("unlinking {}", path.display());
         async_unlink(&path).await?;
@@ -463,10 +483,10 @@ impl AsyncFileSystemImpl for HookFs {
         let new_path_clone = new_path.clone();
         spawn_blocking(move || renameat(None, &path, None, &new_path_clone)).await??;
 
-        let stat = async_stat(&new_path).await?;
+        let stat = self.get_file_attr(&new_path).await?;
 
-        trace!("insert inode_map ({}, {})", stat.st_ino, new_path.display());
-        inode_map.insert(stat.st_ino, new_path);
+        trace!("insert inode_map ({}, {})", stat.ino, new_path.display());
+        inode_map.insert(stat.ino, new_path);
 
         Ok(())
     }
@@ -1030,9 +1050,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("setting owner {}:{} for file", uid, gid);
         fchown(fd, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))?;
 
-        let stat = async_stat(&path).await?;
-
-        let stat = convert_libc_stat_to_fuse_stat(stat)?;
+        let stat = self.get_file_attr(&path).await?;
 
         self.inode_map.write().await.insert(stat.ino, path.clone());
 
