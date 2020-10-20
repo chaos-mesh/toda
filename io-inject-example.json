@@ -1,8 +1,8 @@
 [
     {
-        "type": "attrOverride",
-        "path": "/var/run/test/qqqqq",
+        "type": "latency",
+        "path": "/data/**/*",
         "percent": 100,
-        "ino": 5
+        "latency": "5ms"
     }
 ]

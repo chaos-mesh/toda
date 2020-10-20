@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-Z", "relro-level=full"]

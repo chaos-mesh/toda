@@ -175,7 +175,7 @@ pub trait FsReply<T: Debug>: Sized {
     fn reply(self, result: Result<T>) {
         match result {
             Ok(item) => {
-                trace!("ok. reply with: {:?}", item);
+                trace!("ok. reply");
                 self.reply_ok(item)
             }
             Err(err) => {

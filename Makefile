@@ -8,7 +8,7 @@ example: example-image volume
 	docker run --ulimit nofile=5000:5000 -v io-example:/var/run/test -v /tmp:/tmp -it io-example /main-app
 
 debug:
-	RUSTFLAGS="-Z relro-level=full" cargo build
+	cargo build
 
 example-inject:debug
 	cat ./io-inject-example.json|sudo -E ./target/debug/toda --path /var/run/test --pid $$(pgrep main-app) --verbose trace

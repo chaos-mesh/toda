@@ -31,7 +31,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use log::{debug, error, trace};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CString, OsStr, OsString};
 use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
@@ -100,14 +100,32 @@ pub struct HookFs {
 }
 
 #[derive(Debug, Deref, DerefMut, From)]
-struct InodeMap(HashMap<u64, PathBuf>);
+struct InodeMap(HashMap<u64, HashSet<PathBuf>>);
 
 impl InodeMap {
     fn get_path(&self, inode: u64) -> Result<&Path> {
         self.0
             .get(&inode)
+            .and_then(|item| item.iter().next())
             .map(|item| item.as_path())
             .ok_or(Error::InodeNotFound { inode })
+    }
+
+    fn insert_path<P: AsRef<Path>>(&mut self, inode: u64, path: P) {
+        self.0.entry(inode)
+            .or_default()
+            .insert(path.as_ref().to_owned());
+    }
+
+    fn remove_path<P: AsRef<Path>>(&mut self, inode: &u64, path: P) {
+        match self.0.get_mut(&inode) {
+            Some(set) => {
+                set.remove(path.as_ref());
+            }
+            None => {
+                error!("cannot find inode {} in inode_map", inode);
+            }
+        }
     }
 }
 
@@ -141,7 +159,7 @@ impl HookFs {
         injector: MultiInjector,
     ) -> HookFs {
         let mut inode_map = InodeMap::from(HashMap::new());
-        inode_map.insert(1, original_path.as_ref().to_owned());
+        inode_map.insert_path(1, original_path.as_ref().to_owned());
 
         let inode_map = RwLock::new(inode_map);
 
@@ -259,8 +277,7 @@ impl AsyncFileSystemImpl for HookFs {
         self.inode_map
             .write()
             .await
-            .entry(stat.ino)
-            .or_insert(path.clone());
+            .insert_path(stat.ino, path.clone());
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with {:?}", stat);
@@ -413,7 +430,8 @@ impl AsyncFileSystemImpl for HookFs {
         inject!(self, UNLINK, path.as_path());
 
         let stat = self.get_file_attr(&path).await?;
-        self.inode_map.write().await.remove(&stat.ino);
+        trace!("remove {} from inode_map", &stat.ino);
+        self.inode_map.write().await.remove_path(&stat.ino, &path);
 
         trace!("unlinking {}", path.display());
         async_unlink(&path).await?;
@@ -485,8 +503,8 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = self.get_file_attr(&new_path).await?;
 
-        trace!("insert inode_map ({}, {})", stat.ino, new_path.display());
-        inode_map.insert(stat.ino, new_path);
+        trace!("insert ({}, {})", stat.ino, new_path.display());
+        inode_map.insert_path(stat.ino, new_path);
 
         Ok(())
     }
@@ -591,9 +609,9 @@ impl AsyncFileSystemImpl for HookFs {
         }
 
         let mut reply = Data::new(buf);
-        trace!("before inject {:?}", reply);
+        trace!("before inject DATA[{:?}]", reply.data.len());
         inject_reply!(self, READ, &path, reply, Data);
-        trace!("after inject {:?}", reply);
+        trace!("after inject DATA[{:?}]", reply.data.len());
         Ok(reply)
     }
 
@@ -794,8 +812,7 @@ impl AsyncFileSystemImpl for HookFs {
             self.inode_map
                 .write()
                 .await
-                .entry(entry.ino())
-                .or_insert(path);
+                .insert_path(entry.ino(), path);
 
             if !reply.add(entry.ino(), (index + 1) as i64, file_type, name) {
                 trace!("add file {:?}", entry);
@@ -1052,7 +1069,8 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = self.get_file_attr(&path).await?;
 
-        self.inode_map.write().await.insert(stat.ino, path.clone());
+        trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
+        self.inode_map.write().await.insert_path(stat.ino, path.clone());
 
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);

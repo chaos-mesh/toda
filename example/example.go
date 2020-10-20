@@ -69,7 +69,7 @@ func main() {
 			data[10+originalLength+pos] = byte(char)
 		}
 
-		time.Sleep(time.Second * 50)
+		time.Sleep(time.Second * 1)
 
 		buf := make([]byte, originalLength+len(count))
 		n, err := f.Read(buf)
