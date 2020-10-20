@@ -42,34 +42,21 @@ impl MountInjectionGuard {
     pub fn recover_mount(&mut self, target_pid: i32) -> Result<()> {
         let mount_point = self.original_path.clone();
 
-        let umount_successfully = Arc::new(AtomicBool::new(false));
-        let cloned_umount_successfully = umount_successfully.clone();
-
-        let handler = with_mnt_pid_namespace(
+        with_mnt_pid_namespace(
             box || {
-                while !cloned_umount_successfully.load(Ordering::SeqCst) {
-                    info!("help to umount the mountpoint: {:?}", &mount_point);
-                    if let Err(err) = umount(&mount_point) {
-                        info!("umount returns error: {:?}", err);
-                    }
+                if let Err(err) = umount(&mount_point) {
+                    info!("umount returns error: {:?}", err);
 
-                    std::thread::sleep(std::time::Duration::from_micros(10));
+                    // TODO: handle according to the err 
+                    Err(anyhow::anyhow!("fail to umount"))
+                } else {
+                    Ok(())
                 }
-
-                info!("umount successfully");
-
-                Ok(())
             },
             target_pid,
-        )?;
+        )?.join()??;
 
         self.handler.join()??;
-
-        umount_successfully.store(true, Ordering::SeqCst);
-
-        if let Err(err) = handler.join()? {
-            error!("fail to join thread: {:?}", err)
-        }
 
         with_mnt_pid_namespace(
             box || {

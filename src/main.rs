@@ -106,41 +106,52 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
 fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
-    let path = option.path.clone();
+    
+    let handler = loop {
+        let path = option.path.clone();
+        let pid = option.pid;
 
-    let pid = option.pid;
+        let (before_recover_waiter, before_recover_guard) = futex::lock();
+        let (after_recover_waiter, after_recover_guard) = futex::lock();
 
-    let (before_recover_waiter, before_recover_guard) = futex::lock();
-    let (after_recover_waiter, after_recover_guard) = futex::lock();
-    let handler = namespace::with_mnt_pid_namespace(
-        box move || -> Result<_> {
-            info!("canonicalizing path {}", path.display());
-            let path = path.canonicalize()?;
-            let (_, new_path) = encode_path(&path)?;
+        let handler = namespace::with_mnt_pid_namespace(
+            box move || -> Result<_> {
+                info!("canonicalizing path {}", path.display());
+                let path = path.canonicalize()?;
+                let (_, new_path) = encode_path(&path)?;
+    
+                let ptrace_manager = ptrace::PtraceManager::default();
+    
+                let mut replacer = UnionReplacer::new();
+                replacer.prepare(&ptrace_manager, &path, &new_path)?;
+                info!("running replacer");
+                replacer.run()?;
+    
+                drop(before_recover_guard);
+                after_recover_waiter.wait()?;
+    
+                drop(replacer);
+                info!("replacers detached");
+                info!("recover successfully");
+                Ok(())
+            },
+            pid,
+        )?;
 
-            let ptrace_manager = ptrace::PtraceManager::default();
+        before_recover_waiter.wait()?;
+        info!("recovering mount");
+        if let Err(err) = mount_guard.recover_mount(option.pid) {
+            error!("fail to umount because: {:?}", err);
+            // TODO: retry according to the error
+            info!("retry umount");
+            drop(after_recover_guard);
+            continue
+        }
+        drop(after_recover_guard);
 
-            let mut replacer = UnionReplacer::new();
-            replacer.prepare(&ptrace_manager, &path, &new_path)?;
-            info!("running replacer");
-            replacer.run()?;
-
-            drop(before_recover_guard);
-            after_recover_waiter.wait()?;
-
-            drop(replacer);
-            info!("replacers detached");
-            info!("recover successfully");
-            Ok(())
-        },
-        pid,
-    )?;
-
-    before_recover_waiter.wait()?;
-    info!("recovering mount");
-    mount_guard.recover_mount(option.pid)?;
-    drop(after_recover_guard);
-
+        break handler
+    };
+    
     if let Err(err) = handler.join()? {
         error!("join error: {:?}", err);
     }
