@@ -6,14 +6,13 @@ use crate::InjectorConfig;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
 
-use log::{error, info};
+use log::info;
 
 #[derive(Debug)]
 pub struct MountInjector {
@@ -166,7 +165,7 @@ impl MountInjector {
         info!("wait 1 second");
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_secs(5));
 
         Ok(MountInjectionGuard {
             handler,
