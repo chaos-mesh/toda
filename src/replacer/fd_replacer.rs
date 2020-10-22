@@ -208,11 +208,14 @@ impl<'a> FdReplacer<'a> {
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
-        let current_pid = procfs::process::Process::myself()?.pid;
         let processes = all_processes()?
             .into_iter()
             .filter(|process| -> bool {
-                process.pid != current_pid
+                if let Ok(stat) = process.stat() {
+                    !stat.comm.contains("toda")
+                } else {
+                    true
+                }
             })
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;

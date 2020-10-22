@@ -29,7 +29,6 @@ mod mount_injector;
 mod namespace;
 mod ptrace;
 mod replacer;
-mod unsafe_stdout;
 mod utils;
 
 use injector::InjectorConfig;
@@ -38,7 +37,6 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
-use flexi_logger::LogTarget;
 use log::{error, info};
 use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
@@ -88,7 +86,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
             info!("wakeup host process to mount");
             drop(before_mount_guard);
             info!("wait for mount");
-            after_mount_waiter.wait()?;
+            after_mount_waiter.wait();
             info!("mounted successfully and resume from waiting");
 
             // At this time, `mount --move` has already been executed.
@@ -102,15 +100,14 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
         option.pid,
     )?;
 
-    before_mount_waiter.wait()?;
+    before_mount_waiter.wait();
 
     let mut injection = MountInjector::create_injection(&option.path, injector_config)?;
     let mount_guard = injection.mount(option.pid)?;
     info!("mount successfully");
     drop(after_mount_guard);
 
-    // TODO: handle error
-    handler.join();
+    handler.join().unwrap()?;
     info!("enable injection");
     mount_guard.enable_injection();
 
@@ -142,8 +139,8 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
                 replacer.run()?;
     
                 drop(before_recover_guard);
-                after_recover_waiter.wait()?;
-    
+                after_recover_waiter.wait();
+
                 drop(replacer);
                 info!("replacers detached");
                 info!("recover successfully");
@@ -152,7 +149,7 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
             pid,
         )?;
 
-        before_recover_waiter.wait()?;
+        before_recover_waiter.wait();
         info!("recovering mount");
         if let Err(err) = mount_guard.recover_mount(option.pid) {
             error!("fail to umount because: {:?}", err);
@@ -161,13 +158,12 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
             drop(after_recover_guard);
             continue
         }
-        drop(after_recover_guard);
 
+        drop(after_recover_guard);
         break handler
     };
     
-    // TODO: handle error
-    handler.join();
+    handler.join().unwrap()?;
 
     Ok(())
 }
@@ -197,9 +193,6 @@ fn main() -> Result<()> {
 
     let option = Options::from_args();
     flexi_logger::Logger::with_str(&option.verbose)
-        .log_target(LogTarget::Writer(Box::new(
-            unsafe_stdout::StdoutWriter::new(),
-        )))
         .start()
         .unwrap();
 

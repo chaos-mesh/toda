@@ -1,17 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
-use nix::sys::{stat, wait};
-use nix::unistd::Pid;
-use nix::Error;
+use nix::sys::stat;
 
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
 use std::thread;
-
-use log::info;
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);

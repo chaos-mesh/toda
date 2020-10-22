@@ -54,9 +54,9 @@ impl MountInjectionGuard {
                 }
             },
             target_pid,
-        )?.join(); //TODO: handle error
+        )?.join().unwrap()?;
 
-        self.handler.take().ok_or(anyhow!("handler is empty"))?.join(); // TODO: handle error
+        self.handler.take().ok_or(anyhow!("handler is empty"))?.join().unwrap()?;
 
         let new_path = self.new_path.clone();
         let original_path = self.original_path.clone();
@@ -75,7 +75,7 @@ impl MountInjectionGuard {
             },
             target_pid,
         )?
-        .join(); // TODO: handle error
+        .join().unwrap()?;
 
         Ok(())
     }
@@ -129,7 +129,7 @@ impl MountInjector {
             },
             target_pid,
         )?
-        .join(); // TODO: handle error
+        .join().unwrap()?;
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 

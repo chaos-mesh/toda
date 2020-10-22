@@ -11,7 +11,7 @@ debug:
 	cargo build
 
 example-inject:debug
-	cat ./io-inject-example.json|sudo -E ./target/debug/toda --path /var/run/test --pid $$(pgrep main-app) --verbose trace
+	cat ./io-inject-example.json|sudo LD_LIBRARY_PATH=$$LD_LIBRARY_PATH ./target/debug/toda --path /var/run/test --pid $$(pgrep main-app) --verbose trace
 
 image:
 	DOCKER_BUILDKIT=1 docker build --build-arg HTTP_PROXY=${HTTP_PROXY} --build-arg HTTPS_PROXY=${HTTPS_PROXY} . -t chaos-mesh/toda

@@ -72,7 +72,7 @@ func main() {
 				}
 			}
 
-			time.Sleep(time.Microsecond * 1)
+			time.Sleep(time.Second * 1)
 
 			buf := make([]byte, originalLength+len(count))
 			n, err := f.Read(buf)

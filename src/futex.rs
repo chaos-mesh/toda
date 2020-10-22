@@ -1,86 +1,67 @@
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, Condvar};
 
-use libc::{syscall, SYS_futex, FUTEX_WAIT, FUTEX_WAKE};
-
-use anyhow::Result;
-use nix::Error;
-
-use log::{error, info};
-
-// Don't reuse one futex!
-struct Futex {
-    inner: AtomicI32,
+struct Stop {
+    inner: Mutex<bool>,
+    condvar: Condvar,
 }
 
-impl Futex {
-    fn new() -> Futex {
-        Futex {
-            inner: AtomicI32::new(0),
+impl Stop {
+    fn new() -> Stop {
+        Stop {
+            inner: Mutex::new(false),
+            condvar: Condvar::new(),
         }
     }
-    fn wait(&self) -> Result<()> {
-        let ret = unsafe { syscall(SYS_futex, self.inner.as_mut_ptr(), FUTEX_WAIT, 0, 0, 0, 0) };
-        info!("resume from futex");
-
-        if ret == -1 {
-            let err = Error::last();
-            info!("error while waiting for futex: {:?}", err);
-            Err(err.into())
-        } else {
-            Ok(())
+    fn wait(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        while !*inner {
+            inner = self.condvar.wait(inner).unwrap();
         }
     }
-    fn wake(&self, nr: i32) -> Result<()> {
-        self.inner.store(1, Ordering::SeqCst);
-        let ret = unsafe { syscall(SYS_futex, self.inner.as_mut_ptr(), FUTEX_WAKE, nr, 0, 0, 0) };
-        info!("wake up futex");
+    fn wake(&self) {
+        let mut inner = self.inner.lock().unwrap();
 
-        if ret == -1 {
-            let err = Error::last();
-            error!("error while waking up futex: {:?}", err);
-            Err(err.into())
-        } else {
-            Ok(())
-        }
+        *inner = true;
+        self.condvar.notify_one();
     }
 }
 
-pub struct FutexGuard {
-    futex: Arc<Futex>,
+pub struct StopGuard {
+    stop: Arc<Stop>,
 }
 
-impl FutexGuard {
-    fn new(futex: Arc<Futex>) -> FutexGuard {
-        FutexGuard { futex }
+impl StopGuard {
+    fn new(stop: Arc<Stop>) -> StopGuard {
+        StopGuard { stop }
     }
 }
 
-impl Drop for FutexGuard {
+impl Drop for StopGuard {
     fn drop(&mut self) {
-        self.futex.wake(1).unwrap()
+        self.stop.wake()
     }
 }
 
-pub struct FutexWaiter {
-    futex: Arc<Futex>,
+pub struct StopWaiter {
+    stop: Arc<Stop>,
 }
 
-impl FutexWaiter {
-    fn new(futex: Arc<Futex>) -> FutexWaiter {
-        FutexWaiter { futex }
+impl StopWaiter {
+    fn new(stop: Arc<Stop>) -> StopWaiter {
+        StopWaiter { stop }
     }
 
-    pub fn wait(&self) -> Result<()> {
-        self.futex.wait()
+    pub fn wait(&self) {
+        self.stop.wait()
     }
 }
 
-pub fn lock() -> (FutexWaiter, FutexGuard) {
-    let futex = Arc::new(Futex::new());
+pub fn lock() -> (StopWaiter, StopGuard) {
+    let stop = Arc::new(Stop::new());
 
     (
-        FutexWaiter::new(futex.clone()),
-        FutexGuard::new(futex.clone()),
+        StopWaiter::new(stop.clone()),
+        StopGuard::new(stop.clone()),
     )
 }
