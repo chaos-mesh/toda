@@ -25,8 +25,12 @@ impl<'a> CwdReplacer<'a> {
     ) -> Result<CwdReplacer<'a>> {
         info!("preparing cmdreplacer");
 
+        let current_pid = procfs::process::Process::myself()?.pid;
         let processes = all_processes()?
             .into_iter()
+            .filter(|process| -> bool {
+                process.pid != current_pid
+            })
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
                 trace!("itering proc: {}", pid);

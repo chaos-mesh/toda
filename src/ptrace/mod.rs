@@ -4,6 +4,7 @@ use nix::sys::ptrace;
 use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
+use nix::sys::signal::{kill, Signal};
 
 use log::{info, trace};
 
@@ -29,15 +30,32 @@ impl PtraceManager {
         match counter_ref.get_mut(&raw_pid) {
             Some(count) => *count += 1,
             None => {
-                ptrace::attach(pid)?;
+                info!("send SIGSTOP to process: {}", pid);
+                kill(pid, Signal::SIGSTOP)?;
+                info!("stop {} successfully", pid);
+
+                let process = procfs::process::Process::new(raw_pid)?;
+                for task in process.tasks()? {
+                    if let Ok(task) = task {
+                        info!("attach task: {}", task.tid);
+                        ptrace::attach(Pid::from_raw(task.tid))?;
+                        info!("attach task: {} successfully", task.tid);
+                    }
+                }
+                
                 info!("trace process: {} successfully", pid);
                 counter_ref.insert(raw_pid, 1);
 
                 // TODO: check wait result
                 let status = wait::waitpid(pid, None)?;
                 info!("wait status: {:?}", status);
+
+                info!("send SIGCONT to process: {}", pid);
+                kill(pid, Signal::SIGCONT)?;
+                info!("continue {} successfully", pid);
             }
         }
+        
         Ok(TracedProcess {
             pid: raw_pid,
             manager: self,
@@ -54,7 +72,15 @@ impl PtraceManager {
                     counter_ref.remove(&pid);
 
                     info!("detach process: {}", pid);
-                    ptrace::detach(Pid::from_raw(pid), None)?;
+                    let process = procfs::process::Process::new(pid)?;
+                    for task in process.tasks()? {
+                        if let Ok(task) = task {
+                            info!("detach task: {}", task.tid);
+                            ptrace::detach(Pid::from_raw(task.tid), None)?;
+                            info!("detach task: {} successfully", task.tid);
+                        }
+                    }
+                    info!("detach process: {} successfully", pid);
                 }
 
                 Ok(())

@@ -64,7 +64,11 @@ extern "C" fn callback<F: FnOnce() -> Result<R>, R>(args: *mut libc::c_void) -> 
     let ret = Box::leak(ret) as *mut Option<Result<R>>;
     info!("setting result");
     ret_ptr.store(ret, Ordering::Release);
+    info!("setting result successfully");
 
+    std::mem::forget(ret);
+    std::mem::forget(ret_ptr);
+    std::mem::forget(pid);
     unsafe { libc::exit(0) }
 }
 

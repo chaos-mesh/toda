@@ -89,7 +89,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
             drop(before_mount_guard);
             info!("wait for mount");
             after_mount_waiter.wait()?;
-            info!("mounted successfully a\nd resume from waiting");
+            info!("mounted successfully and resume from waiting");
 
             // At this time, `mount --move` has already been executed.
             // Our FUSE are mounted on the "path", so we
@@ -106,10 +106,11 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
 
     let mut injection = MountInjector::create_injection(&option.path, injector_config)?;
     let mount_guard = injection.mount(option.pid)?;
-
+    info!("mount successfully");
     drop(after_mount_guard);
 
-    handler.join()??;
+    let result = handler.join()?;
+    info!("print result {:?}", result);
     info!("enable injection");
     mount_guard.enable_injection();
 

@@ -208,12 +208,22 @@ impl<'a> FdReplacer<'a> {
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
+        let current_pid = procfs::process::Process::myself()?.pid;
         let processes = all_processes()?
             .into_iter()
+            .filter(|process| -> bool {
+                process.pid != current_pid
+            })
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
 
-                let traced_process = ptrace_manager.trace(pid).ok()?;
+                let traced_process = match ptrace_manager.trace(pid) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        error!("fail to trace process: {} {}", pid, err);
+                        return None
+                    }
+                };
                 let fd = process.fd().ok()?;
 
                 Some((traced_process, fd))
