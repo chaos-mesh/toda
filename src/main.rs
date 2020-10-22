@@ -107,7 +107,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("mount successfully");
     drop(after_mount_guard);
 
-    handler.join().unwrap()?;
+    handler.join(); // TODO: fix EFAULT: BAD Address in subprocess
     info!("enable injection");
     mount_guard.enable_injection();
 
