@@ -162,7 +162,7 @@ impl MountInjector {
             },
             target_pid,
         )?;
-        info!("wait 1 second");
+        info!("wait 5 second");
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         std::thread::sleep(std::time::Duration::from_secs(5));

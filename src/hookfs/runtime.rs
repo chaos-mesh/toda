@@ -5,9 +5,14 @@ use tokio::task::JoinHandle;
 
 use std::future::Future;
 
+use log::trace;
+
 static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    trace!("build tokio runtime");
+
     tokio::runtime::Builder::new()
         .threaded_scheduler()
+        .core_threads(1)
         .thread_name("fuse-thread")
         .enable_all()
         .build()

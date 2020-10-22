@@ -306,6 +306,39 @@ fn read_unlink() {
     assert_eq!(content, "test content");
 }
 
+#[test]
+fn append_write() {
+    let (test_path, _) = init("append_write");
+    let path = test_path.join("file");
+    let mut file = OpenOptions::new().append(true).write(true).create(true).open(&path).unwrap();
+
+    file.write_all(b"hello").unwrap();
+    file.write_all(b" world").unwrap();
+
+    drop(file);
+
+    let output = read_to_string(&path).unwrap();
+    assert_eq!(output, "hello world");
+}
+
+#[test]
+fn append_unlink_write() {
+    let (test_path, _) = init("append_unlink_write");
+    let path = test_path.join("file");
+    let mut file = OpenOptions::new().append(true).write(true).create(true).open(&path).unwrap();
+    let mut read_file = File::open(&path).unwrap();
+
+    file.write_all(b"hello").unwrap();
+    unistd::unlink(&path).unwrap();
+    file.write_all(b" world").unwrap();
+
+    drop(file);
+
+    let mut output = String::new();
+    read_file.read_to_string(&mut output).unwrap();
+    assert_eq!(&output, "hello world");
+}
+
 // func RenameOpenDir(t *testing.T, mnt string) {
 // 	if err := os.Mkdir(mnt+"/dir1", 0755); err != nil {
 // 		t.Fatalf("Mkdir: %v", err)
@@ -426,37 +459,3 @@ fn read_unlink() {
 // 	}
 // }
 
-// // test open with O_APPEND
-// func AppendWrite(t *testing.T, mnt string) {
-// 	fd, err := syscall.Open(mnt+"/file", syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT, 0644)
-// 	if err != nil {
-// 		t.Fatalf("Open: %v", err)
-// 	}
-// 	defer func() {
-// 		if fd != 0 {
-// 			syscall.Close(fd)
-// 		}
-// 	}()
-// 	if _, err := syscall.Write(fd, []byte("hello")); err != nil {
-// 		t.Fatalf("Write 1: %v", err)
-// 	}
-
-// 	if _, err := syscall.Write(fd, []byte("world")); err != nil {
-// 		t.Fatalf("Write 2: %v", err)
-// 	}
-
-// 	if err := syscall.Close(fd); err != nil {
-// 		t.Fatalf("Open: %v", err)
-// 	}
-// 	fd = 0
-// 	want := []byte("helloworld")
-
-// 	got, err := ioutil.ReadFile(mnt + "/file")
-// 	if err != nil {
-// 		t.Fatalf("ReadFile: %v", err)
-// 	}
-
-// 	if bytes.Compare(got, want) != 0 {
-// 		t.Errorf("got %q want %q", got, want)
-// 	}
-// }

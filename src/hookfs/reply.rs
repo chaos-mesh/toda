@@ -172,14 +172,14 @@ pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
     fn reply_err(self, err: libc::c_int);
 
-    fn reply(self, result: Result<T>) {
+    fn reply(self, id: u64, result: Result<T>) {
         match result {
             Ok(item) => {
-                trace!("ok. reply");
+                trace!("ok. reply for request({})", id);
                 self.reply_ok(item)
             }
             Err(err) => {
-                debug!("err. reply with {}", err);
+                debug!("err. reply with {} for request ({})", err, id);
 
                 let err = err.into();
                 if err == -1 {

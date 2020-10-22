@@ -1148,6 +1148,7 @@ impl AsyncFileSystemImpl for HookFs {
 
 async fn async_stat(path: &Path) -> Result<stat::FileStat> {
     let path_clone = path.to_path_buf();
+    trace!("async read stat from path {}", path_clone.display());
     Ok(spawn_blocking(move || stat::lstat(&path_clone)).await??)
 }
 

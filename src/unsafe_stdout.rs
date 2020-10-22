@@ -1,4 +1,4 @@
-use flexi_logger::opt_format;
+use flexi_logger::detailed_format;
 use flexi_logger::writers::LogWriter;
 
 use std::cell::UnsafeCell;
@@ -29,7 +29,7 @@ impl LogWriter for StdoutWriter {
     ) -> std::io::Result<()> {
         unsafe {
             let file = &mut *self.file.get();
-            opt_format(file, now, record)?;
+            detailed_format(file, now, record)?;
             file.write_all(b"\n")
         }
     }

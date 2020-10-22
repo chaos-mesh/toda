@@ -33,50 +33,59 @@ func main() {
 
 	originalLength := len([]byte("HELLO WORLD"))
 
-	var fVec []*os.File
-	var mMap [][]byte
+	for {
+		var fVec []*os.File
+		var mMap [][]byte
 
-	for i := 0; ; i++ {
-		f, err := os.OpenFile("/var/run/test/test", os.O_RDWR, 0666)
-		if err != nil {
-			fmt.Printf("Error: %v+", err)
-			return
-		}
-		err = f.Truncate(1024)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
-		}
-		_, err = f.Seek(10, os.SEEK_SET)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
+		for i := 0; i < 1000; i++ {
+			f, err := os.OpenFile("/var/run/test/test", os.O_RDWR, 0666)
+			if err != nil {
+				fmt.Printf("Error: %v+", err)
+				return
+			}
+			err = f.Truncate(1024)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+			_, err = f.Seek(10, os.SEEK_SET)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+
+			fVec = append(fVec, f)
+			data, err := syscall.Mmap(int(f.Fd()), 0, 10+originalLength+3, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+			if err != nil {
+				fmt.Printf("Error: %v+", err)
+				return
+			}
+			mMap = append(mMap, data)
+
+			f = fVec[i]
+			data = mMap[i]
+
+			count := strconv.Itoa(i)
+			for pos, char := range count {
+				if pos < 3 {
+					data[10+originalLength+pos] = byte(char)
+				}
+			}
+
+			time.Sleep(time.Microsecond * 1)
+
+			buf := make([]byte, originalLength+len(count))
+			n, err := f.Read(buf)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+			fmt.Printf("%v %d bytes: %s\n", time.Now(), n, string(buf[:n]))
 		}
 
-		fVec = append(fVec, f)
-		data, err := syscall.Mmap(int(f.Fd()), 0, 10+originalLength+3, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
-		if err != nil {
-			fmt.Printf("Error: %v+", err)
-			return
+		for i := 0; i < 1000; i++ {
+			fVec[i].Close()
+			syscall.Munmap(mMap[i])
 		}
-		mMap = append(mMap, data)
-
-		f = fVec[i]
-		data = mMap[i]
-
-		count := strconv.Itoa(i)
-		for pos, char := range count {
-			data[10+originalLength+pos] = byte(char)
-		}
-
-		time.Sleep(time.Second * 1)
-
-		buf := make([]byte, originalLength+len(count))
-		n, err := f.Read(buf)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
-		}
-		fmt.Printf("%v %d bytes: %s\n", time.Now(), n, string(buf[:n]))
 	}
 }
