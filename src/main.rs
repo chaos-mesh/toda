@@ -109,8 +109,8 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("mount successfully");
     drop(after_mount_guard);
 
-    let result = handler.join()?;
-    info!("print result {:?}", result);
+    // TODO: handle error
+    handler.join();
     info!("enable injection");
     mount_guard.enable_injection();
 
@@ -166,9 +166,8 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
         break handler
     };
     
-    if let Err(err) = handler.join()? {
-        error!("join error: {:?}", err);
-    }
+    // TODO: handle error
+    handler.join();
 
     Ok(())
 }

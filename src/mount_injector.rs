@@ -1,12 +1,13 @@
 use crate::hookfs;
 use crate::injector::MultiInjector;
 use crate::mount;
-use crate::namespace::{with_mnt_pid_namespace, JoinHandler};
+use crate::namespace::with_mnt_pid_namespace;
 use crate::InjectorConfig;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Result};
 
@@ -25,7 +26,7 @@ pub struct MountInjectionGuard {
     original_path: PathBuf,
     new_path: PathBuf,
     hookfs: Arc<hookfs::HookFs>,
-    handler: JoinHandler<Result<()>>,
+    handler: Option<JoinHandle<Result<()>>>,
 }
 
 impl MountInjectionGuard {
@@ -42,8 +43,8 @@ impl MountInjectionGuard {
         let mount_point = self.original_path.clone();
 
         with_mnt_pid_namespace(
-            box || {
-                if let Err(err) = umount(&mount_point) {
+            box move || {
+                if let Err(err) = umount(mount_point.as_path()) {
                     info!("umount returns error: {:?}", err);
 
                     // TODO: handle according to the err 
@@ -53,17 +54,19 @@ impl MountInjectionGuard {
                 }
             },
             target_pid,
-        )?.join()??;
+        )?.join(); //TODO: handle error
 
-        self.handler.join()??;
+        self.handler.take().ok_or(anyhow!("handler is empty"))?.join(); // TODO: handle error
 
+        let new_path = self.new_path.clone();
+        let original_path = self.original_path.clone();
         with_mnt_pid_namespace(
-            box || {
+            box move || {
                 let mounts = mount::MountsInfo::parse_mounts()?;
 
-                if mounts.non_root(&self.original_path)? {
+                if mounts.non_root(&original_path)? {
                     // TODO: make the parent mount points private before move mount points
-                    mounts.move_mount(&self.new_path, &self.original_path)?;
+                    mounts.move_mount(new_path, original_path)?;
                 } else {
                     return Err(anyhow!("inject on a root mount"));
                 }
@@ -72,7 +75,7 @@ impl MountInjectionGuard {
             },
             target_pid,
         )?
-        .join()??;
+        .join(); // TODO: handle error
 
         Ok(())
     }
@@ -108,13 +111,16 @@ impl MountInjector {
 
     // This method should be called in host namespace
     pub fn mount(&mut self, target_pid: i32) -> Result<MountInjectionGuard> {
+        let original_path = self.original_path.clone();
+        let new_path = self.new_path.clone();
+
         with_mnt_pid_namespace(
-            box || -> Result<_> {
+            box move || -> Result<_> {
                 let mounts = mount::MountsInfo::parse_mounts()?;
 
-                if mounts.non_root(&self.original_path)? {
+                if mounts.non_root(&original_path)? {
                     // TODO: make the parent mount points private before move mount points
-                    mounts.move_mount(&self.original_path, &self.new_path)?;
+                    mounts.move_mount(original_path, new_path)?;
                 } else {
                     return Err(anyhow!("inject on a root mount"));
                 }
@@ -123,7 +129,7 @@ impl MountInjector {
             },
             target_pid,
         )?
-        .join()??;
+        .join(); // TODO: handle error
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 
@@ -138,7 +144,7 @@ impl MountInjector {
         let cloned_hookfs = hookfs.clone();
 
         let handler = with_mnt_pid_namespace(
-            box || {
+            box move || {
                 let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
                 std::fs::create_dir_all(new_path.as_path())?;
@@ -168,7 +174,7 @@ impl MountInjector {
         std::thread::sleep(std::time::Duration::from_secs(5));
 
         Ok(MountInjectionGuard {
-            handler,
+            handler: Some(handler),
             hookfs,
             original_path: self.original_path.clone(),
             new_path: self.new_path.clone(),
