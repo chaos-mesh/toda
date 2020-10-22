@@ -290,6 +290,8 @@ impl<'a> Drop for TracedProcess<'a> {
                 self.pid, err
             )
         }
+
+        info!("detach {} successfully", self.pid)
     }
 }
 
