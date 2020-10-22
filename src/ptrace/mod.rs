@@ -37,18 +37,21 @@ impl PtraceManager {
                 let process = procfs::process::Process::new(raw_pid)?;
                 for task in process.tasks()? {
                     if let Ok(task) = task {
+                        let pid = Pid::from_raw(task.tid);
+
                         info!("attach task: {}", task.tid);
-                        ptrace::attach(Pid::from_raw(task.tid))?;
+                        ptrace::attach(pid)?;
                         info!("attach task: {} successfully", task.tid);
+
+                        // TODO: check wait result
+                        let status = wait::waitpid(pid, None)?;
+                        info!("wait status: {:?}", status);
+                        ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
                     }
                 }
                 
                 info!("trace process: {} successfully", pid);
                 counter_ref.insert(raw_pid, 1);
-
-                // TODO: check wait result
-                let status = wait::waitpid(pid, None)?;
-                info!("wait status: {:?}", status);
 
                 info!("send SIGCONT to process: {}", pid);
                 kill(pid, Signal::SIGCONT)?;
@@ -170,9 +173,16 @@ impl<'a> TracedProcess<'a> {
             };
             ptrace::step(pid, None)?;
 
-            let status = wait::waitpid(pid, None)?;
-            info!("wait status: {:?}", status);
-            // TODO: check wait result
+            loop {
+                let status = wait::waitpid(pid, None)?;
+                info!("wait status: {:?}", status);
+                match status {
+                    wait::WaitStatus::Stopped(_, Signal::SIGTRAP) => {
+                        break
+                    }
+                    _ => ptrace::step(pid, None)?
+                }
+            }
 
             let regs = ptrace::getregs(pid)?;
 
@@ -290,8 +300,6 @@ impl<'a> Drop for TracedProcess<'a> {
                 self.pid, err
             )
         }
-
-        info!("detach {} successfully", self.pid)
     }
 }
 

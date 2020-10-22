@@ -44,18 +44,20 @@ impl MountInjectionGuard {
 
         with_mnt_pid_namespace(
             box move || {
-                if let Err(err) = umount(mount_point.as_path()) {
-                    info!("umount returns error: {:?}", err);
+                loop {
+                    if let Err(err) = umount(mount_point.as_path()) {
+                        info!("umount returns error: {:?}", err);
+                    } else {
+                        return Ok(())
+                    }
 
-                    // TODO: handle according to the err 
-                    Err(anyhow::anyhow!("fail to umount"))
-                } else {
-                    Ok(())
+                    std::thread::sleep(std::time::Duration::from_secs(1));
                 }
             },
             target_pid,
         )?.join().unwrap()?;
 
+        info!("unmount successfully!");
         self.handler.take().ok_or(anyhow!("handler is empty"))?.join().unwrap()?;
 
         let new_path = self.new_path.clone();

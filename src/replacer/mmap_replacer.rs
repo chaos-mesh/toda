@@ -155,7 +155,7 @@ impl<'a> Debug for ProcessAccessor<'a> {
 }
 
 impl<'a> ProcessAccessor<'a> {
-    pub fn run(mut self) -> anyhow::Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
 
         let mut new_paths = Vec::new();
@@ -357,8 +357,8 @@ impl<'a> MmapReplacer<'a> {
 
 impl<'a> Replacer for MmapReplacer<'a> {
     fn run(&mut self) -> Result<()> {
-        info!("running fd replacer");
-        for (_, accessor) in self.processes.drain() {
+        info!("running mmap replacer");
+        for (_, accessor) in self.processes.iter_mut() {
             accessor.run()?;
         }
 

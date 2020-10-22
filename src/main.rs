@@ -21,7 +21,7 @@
 extern crate derive_more;
 
 mod fuse_device;
-mod futex;
+mod stop;
 mod hookfs;
 mod injector;
 mod mount;
@@ -67,8 +67,8 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     let path = option.path.clone();
     let fuse_dev = fuse_device::read_fuse_dev_t()?;
 
-    let (before_mount_waiter, before_mount_guard) = futex::lock();
-    let (after_mount_waiter, after_mount_guard) = futex::lock();
+    let (before_mount_waiter, before_mount_guard) = stop::lock();
+    let (after_mount_waiter, after_mount_guard) = stop::lock();
 
     let handler = namespace::with_mnt_pid_namespace(
         box move || -> Result<_> {
@@ -107,7 +107,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("mount successfully");
     drop(after_mount_guard);
 
-    handler.join(); // TODO: fix EFAULT: BAD Address in subprocess
+    handler.join().unwrap()?; // TODO: fix EFAULT: BAD Address in subprocess
     info!("enable injection");
     mount_guard.enable_injection();
 
@@ -118,50 +118,42 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
     
-    let handler = loop {
-        let path = option.path.clone();
-        let pid = option.pid;
+    let path = option.path.clone();
+    let pid = option.pid;
 
-        let (before_recover_waiter, before_recover_guard) = futex::lock();
-        let (after_recover_waiter, after_recover_guard) = futex::lock();
+    let (before_recover_waiter, before_recover_guard) = stop::lock();
+    let (after_recover_waiter, after_recover_guard) = stop::lock();
 
-        let handler = namespace::with_mnt_pid_namespace(
-            box move || -> Result<_> {
-                info!("canonicalizing path {}", path.display());
-                let path = path.canonicalize()?;
-                let (_, new_path) = encode_path(&path)?;
-    
-                let ptrace_manager = ptrace::PtraceManager::default();
-    
-                let mut replacer = UnionReplacer::new();
-                replacer.prepare(&ptrace_manager, &path, &new_path)?;
-                info!("running replacer");
-                replacer.run()?;
-    
-                drop(before_recover_guard);
-                after_recover_waiter.wait();
+    let handler = namespace::with_mnt_pid_namespace(
+        box move || -> Result<_> {
+            info!("canonicalizing path {}", path.display());
+            let path = path.canonicalize()?;
+            let (_, new_path) = encode_path(&path)?;
 
-                drop(replacer);
-                info!("replacers detached");
-                info!("recover successfully");
-                Ok(())
-            },
-            pid,
-        )?;
+            let ptrace_manager = ptrace::PtraceManager::default();
 
-        before_recover_waiter.wait();
-        info!("recovering mount");
-        if let Err(err) = mount_guard.recover_mount(option.pid) {
-            error!("fail to umount because: {:?}", err);
-            // TODO: retry according to the error
-            info!("retry umount");
-            drop(after_recover_guard);
-            continue
-        }
+            let mut replacer = UnionReplacer::new();
+            replacer.prepare(&ptrace_manager, &path, &new_path)?;
+            info!("running replacer");
+            let result = replacer.run();
+            info!("replace result: {:?}", result);
 
-        drop(after_recover_guard);
-        break handler
-    };
+            drop(before_recover_guard);
+            after_recover_waiter.wait();
+
+            drop(replacer);
+            info!("replacers detached");
+            info!("recover successfully");
+            Ok(())
+        },
+        pid,
+    )?;
+
+    before_recover_waiter.wait();
+    info!("recovering mount");
+    mount_guard.recover_mount(option.pid)?;
+
+    drop(after_recover_guard);
     
     handler.join().unwrap()?;
 

@@ -37,7 +37,7 @@ func main() {
 		var fVec []*os.File
 		var mMap [][]byte
 
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 100; i++ {
 			f, err := os.OpenFile("/var/run/test/test", os.O_RDWR, 0666)
 			if err != nil {
 				fmt.Printf("Error: %v+", err)
@@ -72,7 +72,7 @@ func main() {
 				}
 			}
 
-			time.Sleep(time.Second * 1)
+			time.Sleep(time.Microsecond)
 
 			buf := make([]byte, originalLength+len(count))
 			n, err := f.Read(buf)
@@ -83,7 +83,7 @@ func main() {
 			fmt.Printf("%v %d bytes: %s\n", time.Now(), n, string(buf[:n]))
 		}
 
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 100; i++ {
 			fVec[i].Close()
 			syscall.Munmap(mMap[i])
 		}
