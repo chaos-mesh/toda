@@ -37,7 +37,7 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
-use log::{error, info};
+use log::info;
 use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};

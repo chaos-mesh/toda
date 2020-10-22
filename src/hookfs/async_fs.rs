@@ -394,7 +394,7 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let async_impl = self.0.clone();
         spawn_reply(req.unique(), reply, async move { async_impl.opendir(ino, flags).await });
     }
-    fn readdir(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory) {
+    fn readdir(&mut self, _req: &Request, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory) {
         let async_impl = self.0.clone();
         spawn(async move {
             async_impl.readdir(ino, fh, offset, reply).await;

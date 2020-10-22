@@ -3,6 +3,7 @@ use crate::injector::MultiInjector;
 use crate::mount;
 use crate::namespace::with_mnt_pid_namespace;
 use crate::InjectorConfig;
+use crate::stop;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -145,6 +146,7 @@ impl MountInjector {
         let new_path = self.new_path.clone();
         let cloned_hookfs = hookfs.clone();
 
+        let (before_mount_waiter, before_mount_guard) = stop::lock();
         let handler = with_mnt_pid_namespace(
             box move || {
                 let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
@@ -164,6 +166,7 @@ impl MountInjector {
 
                 info!("mount with flags {:?}", flags);
 
+                drop(before_mount_guard);
                 fuse::mount(fs, &original_path, &flags)?;
 
                 Ok(())
@@ -171,9 +174,11 @@ impl MountInjector {
             target_pid,
         )?;
         info!("wait 5 second");
+
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        before_mount_waiter.wait();
+        std::thread::sleep(std::time::Duration::from_secs(1));
 
         Ok(MountInjectionGuard {
             handler: Some(handler),
