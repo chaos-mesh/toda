@@ -30,6 +30,7 @@ mod namespace;
 mod ptrace;
 mod replacer;
 mod utils;
+mod thread;
 
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
@@ -107,14 +108,14 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("mount successfully");
     drop(after_mount_guard);
 
-    handler.join().unwrap()?; // TODO: fix EFAULT: BAD Address in subprocess
+    handler.join()?; // TODO: fix EFAULT: BAD Address in subprocess
     info!("enable injection");
     mount_guard.enable_injection();
 
     Ok(mount_guard)
 }
 
-fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
+fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
     
@@ -155,7 +156,7 @@ fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
 
     drop(after_recover_guard);
     
-    handler.join().unwrap()?;
+    handler.join()?;
 
     Ok(())
 }
@@ -179,7 +180,7 @@ fn main() -> Result<()> {
     }
 
     // ignore dying children
-    // unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
+    unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 

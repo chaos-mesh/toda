@@ -1,7 +1,7 @@
 mod async_fs;
 mod errors;
 mod reply;
-mod runtime;
+pub mod runtime;
 
 use crate::injector::Injector;
 use crate::injector::Method;

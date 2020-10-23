@@ -5,7 +5,7 @@ use nix::sched::setns;
 use nix::sched::CloneFlags;
 use nix::sys::stat;
 
-use std::thread;
+use crate::thread;
 
 pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     let mnt_ns_path = format!("/proc/{}/ns/mnt", pid);

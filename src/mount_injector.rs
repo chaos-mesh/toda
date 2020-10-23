@@ -8,7 +8,7 @@ use crate::stop;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread::JoinHandle;
+use crate::thread::JoinHandle;
 
 use anyhow::{anyhow, Result};
 
@@ -40,7 +40,7 @@ impl MountInjectionGuard {
     }
 
     // This method should be called in host namespace
-    pub fn recover_mount(&mut self, target_pid: i32) -> Result<()> {
+    pub fn recover_mount(mut self, target_pid: i32) -> Result<()> {
         let mount_point = self.original_path.clone();
 
         with_mnt_pid_namespace(
@@ -56,10 +56,10 @@ impl MountInjectionGuard {
                 }
             },
             target_pid,
-        )?.join().unwrap()?;
+        )?.join()?;
 
         info!("unmount successfully!");
-        self.handler.take().ok_or(anyhow!("handler is empty"))?.join().unwrap()?;
+        self.handler.take().ok_or(anyhow!("handler is empty"))?.join()?;
 
         let new_path = self.new_path.clone();
         let original_path = self.original_path.clone();
@@ -78,7 +78,7 @@ impl MountInjectionGuard {
             },
             target_pid,
         )?
-        .join().unwrap()?;
+        .join()?;
 
         Ok(())
     }
@@ -132,7 +132,7 @@ impl MountInjector {
             },
             target_pid,
         )?
-        .join().unwrap()?;
+        .join()?;
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 

@@ -7,7 +7,7 @@ use std::future::Future;
 
 use log::trace;
 
-static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     trace!("build tokio runtime");
 
     tokio::runtime::Builder::new()
