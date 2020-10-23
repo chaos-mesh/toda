@@ -185,6 +185,7 @@ fn main() -> Result<()> {
 
     let option = Options::from_args();
     flexi_logger::Logger::with_str(&option.verbose)
+        .format(flexi_logger::colored_detailed_format)
         .start()
         .unwrap();
 

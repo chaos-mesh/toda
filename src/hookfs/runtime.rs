@@ -12,7 +12,6 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 
     tokio::runtime::Builder::new()
         .threaded_scheduler()
-        .core_threads(1)
         .thread_name("toda")
         .enable_all()
         .build()

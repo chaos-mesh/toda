@@ -869,10 +869,19 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
 
-    async fn fsyncdir(&self, _ino: u64, _fh: u64, _datasync: bool) -> Result<()> {
-        debug!("unimplemented");
+    async fn fsyncdir(&self, ino: u64, _fh: u64, _datasync: bool) -> Result<()> {
+        // TODO: inject
 
-        Err(Error::Sys(Errno::ENOSYS))
+        let path = {
+            let inode_map = self.inode_map.read().await;
+            inode_map.get_path(ino)?.to_owned()
+        };
+        spawn_blocking(move || -> Result<_> {
+            std::fs::File::open(path)?.sync_all()?;
+
+            Ok(())
+        }).await??;
+        Ok(())
     }
 
     async fn statfs(&self, ino: u64) -> Result<StatFs> {
