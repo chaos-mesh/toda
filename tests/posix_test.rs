@@ -14,12 +14,12 @@
 use toda::hookfs;
 use toda::injector::MultiInjector;
 
-use std::path::PathBuf;
-use std::fs::{read_link, write, read_to_string, File, OpenOptions};
+use std::ffi::OsStr;
+use std::fs::{read_link, read_to_string, write, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::symlink;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::ffi::OsStr;
 use std::sync::Once;
 
 use nix::fcntl;
@@ -37,7 +37,6 @@ fn init(name: &str) -> (PathBuf, fuse::BackgroundSession<'static>) {
     INIT.call_once(|| {
         flexi_logger::Logger::with_env().start().unwrap();
     });
-    
 
     std::fs::remove_dir_all(&test_path_backend).ok();
     std::fs::remove_dir_all(&test_path).ok();
@@ -64,9 +63,7 @@ fn init(name: &str) -> (PathBuf, fuse::BackgroundSession<'static>) {
         .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
         .collect();
 
-    let session = unsafe {
-        fuse::spawn_mount(fs, &test_path, &flags).unwrap()
-    };
+    let session = unsafe { fuse::spawn_mount(fs, &test_path, &flags).unwrap() };
     std::thread::sleep(std::time::Duration::from_secs(1));
     (test_path, session)
 }
@@ -81,15 +78,15 @@ fn symlink_readlink() {
 
     let src = read_link(&dst).unwrap();
 
-	assert_eq!(src, expected_src);
+    assert_eq!(src, expected_src);
 }
 
 #[test]
 fn file_basic() {
     let (test_path, _) = init("file_basic");
 
-	let content = "hello world";
-	let target_file: PathBuf = test_path.join("target_file");
+    let content = "hello world";
+    let target_file: PathBuf = test_path.join("target_file");
 
     write(&target_file, content).unwrap();
 
@@ -109,11 +106,16 @@ fn truncate_file() {
     let (test_path, _) = init("truncate_file");
 
     let content = b"hello world";
-    let target_file: PathBuf =  test_path.join("target_file");
-    
+    let target_file: PathBuf = test_path.join("target_file");
+
     write(&target_file, content).unwrap();
 
-    let file = OpenOptions::new().create(true).write(true).read(true).open(&target_file).unwrap();
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .read(true)
+        .open(&target_file)
+        .unwrap();
 
     let trunc = 5;
     file.set_len(trunc).unwrap();
@@ -128,7 +130,7 @@ fn mkdir_rmdir() {
     let (test_path, _) = init("mkdir_rmdir");
 
     let dir: PathBuf = test_path.join("dir");
-    
+
     std::fs::create_dir(&dir).unwrap();
 
     let file = File::open(&dir).unwrap();
@@ -148,7 +150,6 @@ fn nlink_zero() {
     write(&src, "source").unwrap();
     write(&dst, "dst").unwrap();
 
-    
     let fd = fcntl::open(&dst, fcntl::OFlag::empty(), stat::Mode::empty()).unwrap();
     let st = stat::fstat(fd).unwrap();
 
@@ -184,10 +185,7 @@ fn fstat_deleted() {
         let st = stat::stat(&path).unwrap();
 
         let fd = fcntl::open(&path, fcntl::OFlag::empty(), stat::Mode::empty()).unwrap();
-        let stat_file = StatFile {
-            file: fd,
-            stat: st,
-        };
+        let stat_file = StatFile { file: fd, stat: st };
         files.insert(i, stat_file);
 
         unistd::unlink(&path).unwrap();
@@ -223,7 +221,11 @@ fn parallel_file_open() {
         let path = path.clone();
 
         let handler = std::thread::spawn(move || {
-            let mut file =OpenOptions::new().read(true).write(true).open(&path).unwrap();
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
 
             let mut buf = [0u8; 7];
             file.read_exact(&mut buf).unwrap();
@@ -253,7 +255,7 @@ fn link() {
     let before_ino = st.st_ino;
     std::fs::hard_link(&target, &link).unwrap();
 
-    let st=  stat::stat(&link).unwrap();
+    let st = stat::stat(&link).unwrap();
     assert_eq!(st.st_ino, before_ino);
     assert_eq!(st.st_nlink, 2);
 }
@@ -310,7 +312,12 @@ fn read_unlink() {
 fn append_write() {
     let (test_path, _) = init("append_write");
     let path = test_path.join("file");
-    let mut file = OpenOptions::new().append(true).write(true).create(true).open(&path).unwrap();
+    let mut file = OpenOptions::new()
+        .append(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .unwrap();
 
     file.write_all(b"hello").unwrap();
     file.write_all(b" world").unwrap();
@@ -325,7 +332,12 @@ fn append_write() {
 fn append_unlink_write() {
     let (test_path, _) = init("append_unlink_write");
     let path = test_path.join("file");
-    let mut file = OpenOptions::new().append(true).write(true).create(true).open(&path).unwrap();
+    let mut file = OpenOptions::new()
+        .append(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .unwrap();
     let mut read_file = File::open(&path).unwrap();
 
     file.write_all(b"hello").unwrap();
@@ -458,4 +470,3 @@ fn append_unlink_write() {
 // 		t.Fatalf("Read got %q want %q", back, content)
 // 	}
 // }
-

@@ -2,13 +2,13 @@ use crate::hookfs;
 use crate::injector::MultiInjector;
 use crate::mount;
 use crate::namespace::with_mnt_pid_namespace;
-use crate::InjectorConfig;
 use crate::stop;
+use crate::InjectorConfig;
 
+use crate::thread::JoinHandle;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use crate::thread::JoinHandle;
 
 use anyhow::{anyhow, Result};
 
@@ -44,22 +44,22 @@ impl MountInjectionGuard {
         let mount_point = self.original_path.clone();
 
         with_mnt_pid_namespace(
-            box move || {
-                loop {
-                    if let Err(err) = umount(mount_point.as_path()) {
-                        info!("umount returns error: {:?}", err);
-                    } else {
-                        return Ok(())
-                    }
-
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+            box move || loop {
+                if let Err(err) = umount(mount_point.as_path()) {
+                    info!("umount returns error: {:?}", err);
+                } else {
+                    return Ok(());
                 }
             },
             target_pid,
-        )?.join()?;
+        )?
+        .join()?;
 
         info!("unmount successfully!");
-        self.handler.take().ok_or(anyhow!("handler is empty"))?.join()?;
+        self.handler
+            .take()
+            .ok_or(anyhow!("handler is empty"))?
+            .join()?;
 
         let new_path = self.new_path.clone();
         let original_path = self.original_path.clone();
@@ -169,6 +169,10 @@ impl MountInjector {
                 drop(before_mount_guard);
                 fuse::mount(fs, &original_path, &flags)?;
 
+                drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
+
+                info!("wait for subprocess to die");
+                std::thread::sleep(std::time::Duration::from_secs(1));
                 Ok(())
             },
             target_pid,

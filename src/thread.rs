@@ -13,14 +13,14 @@
 
 use std::sync::mpsc::{channel, Receiver};
 
-pub struct JoinHandle<T>
-{
+pub struct JoinHandle<T> {
     channel: Receiver<T>,
 }
 
 impl<T> JoinHandle<T>
-
-where T: Send + 'static, {
+where
+    T: Send + 'static,
+{
     pub fn join(self) -> T {
         self.channel.recv().unwrap()
     }
@@ -41,7 +41,5 @@ where
         std::process::exit(0);
     });
 
-    return JoinHandle::<T> {
-        channel: receiver,
-    }
+    return JoinHandle::<T> { channel: receiver };
 }

@@ -112,7 +112,8 @@ impl InodeMap {
     }
 
     fn insert_path<P: AsRef<Path>>(&mut self, inode: u64, path: P) {
-        self.0.entry(inode)
+        self.0
+            .entry(inode)
             .or_default()
             .insert(path.as_ref().to_owned());
     }
@@ -162,7 +163,7 @@ impl Dir {
 }
 
 impl std::ops::Deref for Dir {
-    type Target=dir::Dir;
+    type Target = dir::Dir;
 
     fn deref(&self) -> &Self::Target {
         &self.dir
@@ -194,7 +195,7 @@ impl File {
 }
 
 impl std::ops::Deref for File {
-    type Target=fs::File;
+    type Target = fs::File;
 
     fn deref(&self) -> &Self::Target {
         &self.file
@@ -776,7 +777,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn readdir(&self, _ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
         trace!("readdir");
-    
+
         let offset = offset as usize;
 
         // TODO: optimize the implementation
@@ -844,10 +845,7 @@ impl AsyncFileSystemImpl for HookFs {
                 entry.ino(),
                 path.display()
             );
-            self.inode_map
-                .write()
-                .await
-                .insert_path(entry.ino(), path);
+            self.inode_map.write().await.insert_path(entry.ino(), path);
 
             if !reply.add(entry.ino(), (index + 1) as i64, file_type, name) {
                 trace!("add file {:?}", entry);
@@ -880,7 +878,8 @@ impl AsyncFileSystemImpl for HookFs {
             std::fs::File::open(path)?.sync_all()?;
 
             Ok(())
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -1102,11 +1101,18 @@ impl AsyncFileSystemImpl for HookFs {
         let stat = self.get_file_attr(&path).await?;
 
         trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
-        self.inode_map.write().await.insert_path(stat.ino, path.clone());
+        self.inode_map
+            .write()
+            .await
+            .insert_path(stat.ino, path.clone());
 
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);
-        let fh = self.opened_files.write().await.insert(File::new(file, &path));
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(file, &path));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION

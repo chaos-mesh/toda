@@ -10,5 +10,7 @@
 
 * Compile this binary with `-Z relro-level=full`, then it will load (mmap) all dependencies into memory at the beginning.
 
+* glibc should be modified to clone without `CLONE_THREAD | CLONE_FS` and with `SIGCHLD`
+
 ## License
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda?ref=badge_large)

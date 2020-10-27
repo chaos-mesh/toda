@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::{Mutex, Condvar};
+use std::sync::{Condvar, Mutex};
 
 struct Stop {
     inner: Mutex<bool>,
@@ -60,8 +60,5 @@ impl StopWaiter {
 pub fn lock() -> (StopWaiter, StopGuard) {
     let stop = Arc::new(Stop::new());
 
-    (
-        StopWaiter::new(stop.clone()),
-        StopGuard::new(stop.clone()),
-    )
+    (StopWaiter::new(stop.clone()), StopGuard::new(stop.clone()))
 }

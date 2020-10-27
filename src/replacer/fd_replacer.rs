@@ -224,7 +224,7 @@ impl<'a> FdReplacer<'a> {
                     Ok(p) => p,
                     Err(err) => {
                         error!("fail to trace process: {} {}", pid, err);
-                        return None
+                        return None;
                     }
                 };
                 let fd = process.fd().ok()?;

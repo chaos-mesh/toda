@@ -21,7 +21,6 @@
 extern crate derive_more;
 
 mod fuse_device;
-mod stop;
 mod hookfs;
 mod injector;
 mod mount;
@@ -29,8 +28,9 @@ mod mount_injector;
 mod namespace;
 mod ptrace;
 mod replacer;
-mod utils;
+mod stop;
 mod thread;
+mod utils;
 
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
@@ -46,6 +46,8 @@ use structopt::StructOpt;
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
+
+use libc::prctl;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -118,7 +120,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
 fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
-    
+
     let path = option.path.clone();
     let pid = option.pid;
 
@@ -155,7 +157,7 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     mount_guard.recover_mount(option.pid)?;
 
     drop(after_recover_guard);
-    
+
     handler.join()?;
 
     Ok(())
@@ -184,6 +186,10 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
+    unsafe {
+        prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0);
+    }
+
     let option = Options::from_args();
     flexi_logger::Logger::with_str(&option.verbose)
         .format(flexi_logger::colored_detailed_format)
@@ -199,5 +205,7 @@ fn main() -> Result<()> {
 
     resume(option, mount_injector)?;
 
+    info!("wait for subprocess to die");
+    std::thread::sleep(std::time::Duration::from_secs(1));
     Ok(())
 }

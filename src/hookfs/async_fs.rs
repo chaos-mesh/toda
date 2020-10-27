@@ -194,7 +194,9 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     fn lookup(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEntry) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move { async_impl.lookup(parent, name).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.lookup(parent, name).await
+        });
     }
 
     fn forget(&mut self, _req: &Request, ino: u64, nlookup: u64) {
@@ -208,7 +210,11 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
 
     fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.getattr(ino).await });
+        spawn_reply(
+            req.unique(),
+            reply,
+            async move { async_impl.getattr(ino).await },
+        );
     }
 
     fn setattr(
@@ -240,7 +246,9 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
 
     fn readlink(&mut self, req: &Request, ino: u64, reply: ReplyData) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.readlink(ino).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.readlink(ino).await
+        });
     }
     fn mknod(
         &mut self,
@@ -267,20 +275,23 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.mkdir(parent, name, mode).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.mkdir(parent, name, mode).await
+        });
     }
     fn unlink(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move { async_impl.unlink(parent, name).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.unlink(parent, name).await
+        });
     }
     fn rmdir(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move { async_impl.rmdir(parent, name).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.rmdir(parent, name).await
+        });
     }
     fn symlink(
         &mut self,
@@ -329,17 +340,11 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn open(&mut self, req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.open(ino, flags).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.open(ino, flags).await
+        });
     }
-    fn read(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        size: u32,
-        reply: ReplyData,
-    ) {
+    fn read(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
         let async_impl = self.0.clone();
         spawn_reply(req.unique(), reply, async move {
             async_impl.read(ino, fh, offset, size).await
@@ -363,10 +368,9 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn flush(&mut self, req: &Request, ino: u64, fh: u64, lock_owner: u64, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.flush(ino, fh, lock_owner).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.flush(ino, fh, lock_owner).await
+        });
     }
     fn release(
         &mut self,
@@ -385,14 +389,15 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn fsync(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.fsync(ino, fh, datasync).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.fsync(ino, fh, datasync).await
+        });
     }
     fn opendir(&mut self, req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.opendir(ino, flags).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.opendir(ino, flags).await
+        });
     }
     fn readdir(&mut self, _req: &Request, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory) {
         let async_impl = self.0.clone();
@@ -402,10 +407,9 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: u32, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.releasedir(ino, fh, flags).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.releasedir(ino, fh, flags).await
+        });
     }
     fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
@@ -415,7 +419,11 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     }
     fn statfs(&mut self, req: &Request, ino: u64, reply: ReplyStatfs) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.statfs(ino).await });
+        spawn_reply(
+            req.unique(),
+            reply,
+            async move { async_impl.statfs(ino).await },
+        );
     }
     fn setxattr(
         &mut self,
@@ -444,26 +452,28 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.getxattr(ino, name, size).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.getxattr(ino, name, size).await
+        });
     }
     fn listxattr(&mut self, req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.listxattr(ino, size).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.listxattr(ino, size).await
+        });
     }
     fn removexattr(&mut self, req: &Request, ino: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), 
-            reply,
-            async move { async_impl.removexattr(ino, name).await },
-        );
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.removexattr(ino, name).await
+        });
     }
     fn access(&mut self, req: &Request, ino: u64, mask: u32, reply: ReplyEmpty) {
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move { async_impl.access(ino, mask).await });
+        spawn_reply(req.unique(), reply, async move {
+            async_impl.access(ino, mask).await
+        });
     }
     fn create(
         &mut self,

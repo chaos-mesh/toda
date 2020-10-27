@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
+use nix::sys::signal::{kill, Signal};
 use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
-use nix::sys::signal::{kill, Signal};
 
 use log::{info, trace};
 
@@ -49,7 +49,7 @@ impl PtraceManager {
                         ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
                     }
                 }
-                
+
                 info!("trace process: {} successfully", pid);
                 counter_ref.insert(raw_pid, 1);
 
@@ -58,7 +58,7 @@ impl PtraceManager {
                 info!("continue {} successfully", pid);
             }
         }
-        
+
         Ok(TracedProcess {
             pid: raw_pid,
             manager: self,
@@ -79,7 +79,13 @@ impl PtraceManager {
                     for task in process.tasks()? {
                         if let Ok(task) = task {
                             info!("detach task: {}", task.tid);
-                            ptrace::detach(Pid::from_raw(task.tid), None)?;
+                            match ptrace::detach(Pid::from_raw(task.tid), None) {
+                                Ok(()) => {}
+                                Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
+                                    // ignore because the task could be newly created
+                                }
+                                Err(err) => Err(err)?,
+                            }
                             info!("detach task: {} successfully", task.tid);
                         }
                     }
@@ -177,10 +183,8 @@ impl<'a> TracedProcess<'a> {
                 let status = wait::waitpid(pid, None)?;
                 info!("wait status: {:?}", status);
                 match status {
-                    wait::WaitStatus::Stopped(_, Signal::SIGTRAP) => {
-                        break
-                    }
-                    _ => ptrace::step(pid, None)?
+                    wait::WaitStatus::Stopped(_, Signal::SIGTRAP) => break,
+                    _ => ptrace::step(pid, None)?,
                 }
             }
 

@@ -7,8 +7,8 @@ use super::Injector;
 use crate::hookfs::{Reply, Result};
 
 use async_trait::async_trait;
-use log::trace;
 use fuse::FileAttr;
+use log::trace;
 
 use std::path::Path;
 

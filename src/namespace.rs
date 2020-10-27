@@ -16,14 +16,12 @@ pub fn enter_mnt_namespace(pid: i32) -> Result<()> {
     Ok(())
 }
 
-pub fn with_mnt_pid_namespace<F, R>(
-    f: Box<F>,
-    pid: i32,
-) -> Result<thread::JoinHandle<Result<R>>> 
-where 
-    F: FnOnce() -> Result<R>, 
+pub fn with_mnt_pid_namespace<F, R>(f: Box<F>, pid: i32) -> Result<thread::JoinHandle<Result<R>>>
+where
+    F: FnOnce() -> Result<R>,
     F: Send + 'static,
-    R: Send + 'static {
+    R: Send + 'static,
+{
     let pid_ns_path = format!("/proc/{}/ns/pid", pid);
     let pid_ns = open(pid_ns_path.as_str(), OFlag::O_RDONLY, stat::Mode::all())?;
 
