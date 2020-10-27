@@ -20,6 +20,8 @@ jobs:
       run: cargo build --verbose
     - name: Grant Permission on /tmp
       run: sudo chmod -R 777 /tmp
+    - name: Add user_allow_other to /etc/fuse.conf
+      run: echo "user_allow_other" | sudo tee -a /etc/fuse.conf
     - name: Run tests
       run: cargo test --verbose
   clippy_check:
