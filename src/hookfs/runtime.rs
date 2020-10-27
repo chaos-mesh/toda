@@ -26,7 +26,7 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    for runtime in RUNTIME.read().unwrap().iter() {
+    if let Some(runtime) = &*RUNTIME.read().unwrap() {
         return runtime.spawn(future);
     }
     unreachable!()
@@ -37,7 +37,7 @@ where
     R: Send + 'static,
     F: FnOnce() -> R + Send + 'static,
 {
-    for runtime in RUNTIME.read().unwrap().iter() {
+    if let Some(runtime) = &*RUNTIME.read().unwrap() {
         return runtime.handle().spawn_blocking(func);
     }
     unreachable!()

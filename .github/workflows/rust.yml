@@ -19,7 +19,7 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Grant Permission on /tmp
-      run: chmod -R 777 /tmp
+      run: sudo chmod -R 777 /tmp
     - name: Run tests
       run: cargo test --verbose
   clippy_check:
