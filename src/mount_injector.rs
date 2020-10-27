@@ -13,6 +13,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
+use nix::sys::wait;
+use nix::unistd::Pid;
 
 use log::info;
 
@@ -172,7 +174,8 @@ impl MountInjector {
                 drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 
                 info!("wait for subprocess to die");
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                // TODO: figure out why it panics here
+                wait::waitpid(Pid::from_raw(0), None).ok();
                 Ok(())
             },
             target_pid,

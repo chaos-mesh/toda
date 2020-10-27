@@ -41,6 +41,8 @@ use anyhow::Result;
 use log::info;
 use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
+use nix::sys::wait;
+use nix::unistd::Pid;
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
 
@@ -206,6 +208,8 @@ fn main() -> Result<()> {
     resume(option, mount_injector)?;
 
     info!("wait for subprocess to die");
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // TODO: figure out why it panics here
+    wait::waitpid(Pid::from_raw(0), None).ok();
+
     Ok(())
 }
