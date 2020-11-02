@@ -175,7 +175,7 @@ impl MountInjector {
             },
             target_pid,
         )?;
-        info!("wait 5 second");
+        info!("wait 1 second");
 
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9

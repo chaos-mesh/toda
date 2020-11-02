@@ -6,7 +6,7 @@ use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use log::{info, trace};
+use log::{info, trace, warn};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -44,8 +44,14 @@ impl PtraceManager {
                         info!("attach task: {} successfully", task.tid);
 
                         // TODO: check wait result
-                        let status = wait::waitpid(pid, None)?;
-                        info!("wait status: {:?}", status);
+                        match wait::waitpid(pid, None) {
+                            Ok(status) => {
+                                info!("wait status: {:?}", status);
+                            }
+                            Err(err) => {
+                                warn!("fail to wait for process({}): {:?}", pid, err)
+                            }
+                        }
                         ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
                     }
                 }
