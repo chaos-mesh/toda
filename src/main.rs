@@ -70,7 +70,6 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("inject with config {:?}", injector_config);
 
     let path = option.path.clone();
-    let fuse_dev = fuse_device::read_fuse_dev_t()?;
 
     let (before_mount_waiter, before_mount_guard) = stop::lock();
     let (after_mount_waiter, after_mount_guard) = stop::lock();
@@ -84,7 +83,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
             let mut replacer = UnionReplacer::new();
             replacer.prepare(&ptrace_manager, &path, &path)?;
 
-            if let Err(err) = fuse_device::mkfuse_node(fuse_dev) {
+            if let Err(err) = fuse_device::mkfuse_node() {
                 info!("fail to make /dev/fuse node: {}", err)
             }
 
