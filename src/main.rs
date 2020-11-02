@@ -38,7 +38,7 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
-use log::info;
+use log::{info, warn};
 use nix::sys::mman::{mlockall, MlockAllFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::wait;
@@ -209,7 +209,9 @@ fn main() -> Result<()> {
 
     info!("wait for subprocess to die");
     // TODO: figure out why it panics here
-    wait::waitpid(Pid::from_raw(0), None).ok();
+    if let Err(err) = wait::waitpid(Pid::from_raw(0), None) {
+        warn!("fail to wait subprocess: {:?}", err)
+    }
 
     Ok(())
 }
