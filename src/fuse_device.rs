@@ -1,4 +1,4 @@
-use nix::sys::stat::{mknod, makedev, Mode, SFlag};
+use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::Error as NixError;
 
 pub fn mkfuse_node() -> anyhow::Result<()> {

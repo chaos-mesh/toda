@@ -41,5 +41,5 @@ where
         std::process::exit(0);
     });
 
-    return JoinHandle::<T> { channel: receiver };
+    JoinHandle::<T> { channel: receiver }
 }

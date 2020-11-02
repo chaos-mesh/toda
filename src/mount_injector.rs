@@ -13,8 +13,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
-use nix::sys::wait;
-use nix::unistd::Pid;
 
 use log::info;
 
@@ -64,7 +62,7 @@ impl MountInjectionGuard {
             .join()?;
 
         let new_path = self.new_path.clone();
-        let original_path = self.original_path.clone();
+        let original_path = self.original_path;
         with_mnt_pid_namespace(
             box move || {
                 let mounts = mount::MountsInfo::parse_mounts()?;

@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use std::future::Future;
 use std::sync::RwLock;
 
-use log::{trace, info, warn};
+use log::{info, trace, warn};
 
 pub static RUNTIME: Lazy<RwLock<Option<Runtime>>> = Lazy::new(|| {
     trace!("build tokio runtime");

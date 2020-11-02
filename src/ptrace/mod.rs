@@ -84,7 +84,7 @@ impl PtraceManager {
                                 Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
                                     // ignore because the task could be newly created
                                 }
-                                Err(err) => Err(err)?,
+                                Err(err) => return Err(err.into()),
                             }
                             info!("detach task: {} successfully", task.tid);
                         }

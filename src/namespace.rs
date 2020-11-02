@@ -3,10 +3,10 @@ use anyhow::Result;
 use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
+use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::sys::stat;
 use nix::sys::wait;
 use nix::unistd::Pid;
-use nix::sys::signal::{signal, SigHandler, Signal};
 
 use log::{info, warn};
 
