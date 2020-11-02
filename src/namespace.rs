@@ -4,6 +4,11 @@ use nix::fcntl::{open, OFlag};
 use nix::sched::setns;
 use nix::sched::CloneFlags;
 use nix::sys::stat;
+use nix::sys::wait;
+use nix::unistd::Pid;
+use nix::sys::signal::{signal, SigHandler, Signal};
+
+use log::info;
 
 use crate::thread;
 
@@ -28,10 +33,18 @@ where
     setns(pid_ns, CloneFlags::CLONE_NEWPID)?;
 
     Ok(thread::spawn(move || -> Result<R> {
-        if let Err(err) = enter_mnt_namespace(pid) {
+        unsafe { signal(Signal::SIGCHLD, SigHandler::SigIgn)? };
+
+        let result = if let Err(err) = enter_mnt_namespace(pid) {
             Err(err)
         } else {
             f()
-        }
+        };
+
+        info!("wait for subprocess to die");
+        // TODO: figure out why it panics here
+        wait::waitpid(Pid::from_raw(0), None).ok();
+
+        result
     }))
 }

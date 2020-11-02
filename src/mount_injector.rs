@@ -173,9 +173,6 @@ impl MountInjector {
 
                 drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 
-                info!("wait for subprocess to die");
-                // TODO: figure out why it panics here
-                wait::waitpid(Pid::from_raw(0), None).ok();
                 Ok(())
             },
             target_pid,
