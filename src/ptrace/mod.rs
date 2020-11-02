@@ -52,7 +52,6 @@ impl PtraceManager {
                                 warn!("fail to wait for process({}): {:?}", pid, err)
                             }
                         }
-                        ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
                     }
                 }
 
