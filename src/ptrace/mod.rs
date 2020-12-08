@@ -22,11 +22,11 @@ pub struct PtraceManager {
 }
 
 thread_local! {
-    static ptrace_manager: PtraceManager = PtraceManager::default()
+    static PTRACE_MANAGER: PtraceManager = PtraceManager::default()
 }
 
 pub fn trace(pid: i32) -> Result<TracedProcess> {
-    ptrace_manager.with(|pm| pm.trace(pid))
+    PTRACE_MANAGER.with(|pm| pm.trace(pid))
 }
 
 impl PtraceManager {
@@ -115,7 +115,7 @@ pub struct TracedProcess {
 impl Clone for TracedProcess {
     fn clone(&self) -> Self {
         // TODO: handler error here
-        ptrace_manager.with(|pm| pm.trace(self.pid)).unwrap()
+        PTRACE_MANAGER.with(|pm| pm.trace(self.pid)).unwrap()
     }
 }
 
@@ -305,7 +305,7 @@ impl Drop for TracedProcess {
     fn drop(&mut self) {
         info!("dropping traced process: {}", self.pid);
 
-        if let Err(err) = ptrace_manager.with(|pm| pm.detach(self.pid)) {
+        if let Err(err) = PTRACE_MANAGER.with(|pm| pm.detach(self.pid)) {
             info!(
                 "deteching process {} failed with error: {:?}",
                 self.pid, err

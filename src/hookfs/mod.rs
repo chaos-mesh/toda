@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use derive_more::{Deref, DerefMut, From};
 use fuser::*;
 use slab::Slab;
-use time::Timespec;
+
 
 use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
 
@@ -397,12 +397,12 @@ impl AsyncFileSystemImpl for HookFs {
         size: Option<u64>,
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
-        ctime: Option<std::time::SystemTime>,
-        fh: Option<u64>,
-        crtime: Option<std::time::SystemTime>,
-        chgtime: Option<std::time::SystemTime>,
-        bkuptime: Option<std::time::SystemTime>,
-        flags: Option<u32>,
+        _ctime: Option<std::time::SystemTime>,
+        _fh: Option<u64>,
+        _crtime: Option<std::time::SystemTime>,
+        _chgtime: Option<std::time::SystemTime>,
+        _bkuptime: Option<std::time::SystemTime>,
+        _flags: Option<u32>,
     ) -> Result<Attr> {
         trace!("setattr");
 
@@ -478,7 +478,7 @@ impl AsyncFileSystemImpl for HookFs {
         parent: u64,
         name: OsString,
         mode: u32,
-        umask: u32,
+        _umask: u32,
         rdev: u32,
     ) -> Result<Entry> {
         trace!("mknod");
@@ -500,7 +500,7 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(parent, name).await
     }
 
-    async fn mkdir(&self, parent: u64, name: OsString, umask: u32, mode: u32) -> Result<Entry> {
+    async fn mkdir(&self, parent: u64, name: OsString, _umask: u32, mode: u32) -> Result<Entry> {
         trace!("mkdir");
 
         let path = {
@@ -578,7 +578,7 @@ impl AsyncFileSystemImpl for HookFs {
         name: OsString,
         newparent: u64,
         newname: OsString,
-        flags: u32,
+        _flags: u32,
     ) -> Result<()> {
         trace!("rename");
 
@@ -680,12 +680,12 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn read(
         &self,
-        ino: u64,
+        _ino: u64,
         fh: u64,
         offset: i64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _flags: i32,
+        _lock_owner: Option<u64>,
     ) -> Result<Data> {
         trace!("read");
 
@@ -720,13 +720,13 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn write(
         &self,
-        ino: u64,
+        _ino: u64,
         fh: u64,
         offset: i64,
         data: Vec<u8>,
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
     ) -> Result<Write> {
         trace!("write");
 
@@ -1121,7 +1121,7 @@ impl AsyncFileSystemImpl for HookFs {
         parent: u64,
         name: OsString,
         mode: u32,
-        umask: u32,
+        _umask: u32,
         flags: i32,
         uid: u32,
         gid: u32,

@@ -30,7 +30,7 @@ use nix::unistd;
 
 static INIT: Once = Once::new();
 
-fn init(name: &str) -> (PathBuf, fuse::BackgroundSession<'static>) {
+fn init(name: &str) -> (PathBuf, fuser::BackgroundSession) {
     let test_path_backend: PathBuf = ["/tmp/test_mnt_backend", name].iter().collect();
     let test_path: PathBuf = ["/tmp/test_mnt", name].iter().collect();
 
@@ -63,7 +63,7 @@ fn init(name: &str) -> (PathBuf, fuse::BackgroundSession<'static>) {
         .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
         .collect();
 
-    let session = unsafe { fuse::spawn_mount(fs, &test_path, &flags).unwrap() };
+    let session = fuser::spawn_mount(fs, &test_path, &flags).unwrap();
     std::thread::sleep(std::time::Duration::from_secs(1));
     (test_path, session)
 }
