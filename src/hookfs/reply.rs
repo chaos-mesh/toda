@@ -1,6 +1,5 @@
-use fuse::*;
+use fuser::*;
 use log::{debug, error, trace};
-use time::{get_time, Timespec};
 
 use super::errors::Result;
 
@@ -21,14 +20,14 @@ pub enum Reply<'a> {
 
 #[derive(Debug)]
 pub struct Entry {
-    pub time: Timespec,
+    pub time: std::time::Duration,
     pub stat: FileAttr,
     pub generation: u64,
 }
 impl Entry {
-    pub fn new(stat: FileAttr, generation: u64) -> Self {
+    pub fn new(time: std::time::Duration, stat: FileAttr, generation: u64) -> Self {
         Self {
-            time: get_time(),
+            time,
             stat,
             generation,
         }
@@ -38,25 +37,22 @@ impl Entry {
 #[derive(Debug)]
 pub struct Open {
     pub fh: u64,
-    pub flags: u32,
+    pub flags: i32,
 }
 impl Open {
-    pub fn new(fh: u64, flags: u32) -> Self {
+    pub fn new(fh: u64, flags: i32) -> Self {
         Self { fh, flags }
     }
 }
 
 #[derive(Debug)]
 pub struct Attr {
-    pub time: Timespec,
+    pub time: std::time::Duration,
     pub attr: FileAttr,
 }
 impl Attr {
-    pub fn new(attr: FileAttr) -> Self {
-        Self {
-            time: get_time(),
-            attr,
-        }
+    pub fn new(time: std::time::Duration, attr: FileAttr) -> Self {
+        Self { time, attr }
     }
 }
 
@@ -117,16 +113,22 @@ impl Write {
 
 #[derive(Debug)]
 pub struct Create {
-    pub ttl: Timespec,
+    pub ttl: std::time::Duration,
     pub attr: FileAttr,
     pub generation: u64,
     pub fh: u64,
-    pub flags: u32,
+    pub flags: i32,
 }
 impl Create {
-    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: u32) -> Self {
+    pub fn new(
+        ttl: std::time::Duration,
+        attr: FileAttr,
+        generation: u64,
+        fh: u64,
+        flags: i32,
+    ) -> Self {
         Self {
-            ttl: get_time(),
+            ttl,
             attr,
             generation,
             fh,
@@ -139,12 +141,12 @@ impl Create {
 pub struct Lock {
     pub start: u64,
     pub end: u64,
-    pub typ: u32,
+    pub typ: i32,
     pub pid: u32,
 }
 
 impl Lock {
-    pub fn _new(start: u64, end: u64, typ: u32, pid: u32) -> Self {
+    pub fn _new(start: u64, end: u64, typ: i32, pid: u32) -> Self {
         Self {
             start,
             end,
@@ -202,7 +204,7 @@ impl FsReply<Entry> for ReplyEntry {
 
 impl FsReply<Open> for ReplyOpen {
     fn reply_ok(self, item: Open) {
-        self.opened(item.fh, item.flags);
+        self.opened(item.fh, item.flags as u32);
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);
@@ -256,7 +258,13 @@ impl FsReply<Write> for ReplyWrite {
 
 impl FsReply<Create> for ReplyCreate {
     fn reply_ok(self, item: Create) {
-        self.created(&item.ttl, &item.attr, item.generation, item.fh, item.flags);
+        self.created(
+            &item.ttl,
+            &item.attr,
+            item.generation,
+            item.fh,
+            item.flags as u32,
+        );
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);

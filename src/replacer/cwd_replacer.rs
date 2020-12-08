@@ -1,6 +1,6 @@
-use super::Replacer;
-use super::utils::all_processes;
 use super::ptrace;
+use super::utils::all_processes;
+use super::Replacer;
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};

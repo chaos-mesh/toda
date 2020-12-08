@@ -1,6 +1,6 @@
-use super::Replacer;
-use super::utils::all_processes;
 use super::ptrace;
+use super::utils::all_processes;
+use super::Replacer;
 
 use std::io::{Cursor, Read, Write};
 use std::iter::FromIterator;

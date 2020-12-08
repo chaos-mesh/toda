@@ -4,10 +4,10 @@ use crate::mount;
 use crate::stop;
 use crate::InjectorConfig;
 
-use std::thread::JoinHandle;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Result};
 
@@ -46,7 +46,7 @@ impl MountInjectionGuard {
             if let Err(err) = umount(mount_point.as_path()) {
                 info!("umount returns error: {:?}", err);
             } else {
-                break
+                break;
             }
         }
 
@@ -54,7 +54,8 @@ impl MountInjectionGuard {
         self.handler
             .take()
             .ok_or(anyhow!("handler is empty"))?
-            .join().unwrap()?;
+            .join()
+            .unwrap()?;
 
         let new_path = self.new_path.clone();
         let original_path = self.original_path;
@@ -127,35 +128,31 @@ impl MountInjector {
         let cloned_hookfs = hookfs.clone();
 
         let (before_mount_waiter, before_mount_guard) = stop::lock();
-        let handler = std::thread::spawn(
-            box move || {
-                let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
+        let handler = std::thread::spawn(box move || {
+            let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
-                std::fs::create_dir_all(new_path.as_path())?;
+            std::fs::create_dir_all(new_path.as_path())?;
 
-                let args = [
-                    "allow_other",
-                    "nonempty",
-                    "fsname=toda",
-                    "default_permissions",
-                ];
-                let flags: Vec<_> = args
-                    .iter()
-                    .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
-                    .collect();
+            let args = [
+                "allow_other",
+                "nonempty",
+                "fsname=toda",
+                "default_permissions",
+            ];
+            let flags: Vec<_> = args
+                .iter()
+                .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
+                .collect();
 
-                info!("mount with flags {:?}", flags);
+            info!("mount with flags {:?}", flags);
 
-                drop(before_mount_guard);
-                fuse::mount(fs, &original_path, &flags)?;
+            drop(before_mount_guard);
+            fuser::mount(fs, &original_path, &flags)?;
 
-                drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
+            drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 
-                Ok(())
-            },
-        );
-        info!("wait 1 second");
-
+            Ok(())
+        });
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         before_mount_waiter.wait();

@@ -11,7 +11,7 @@ pub use multi_injector::MultiInjector;
 
 use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
-use fuse::FileAttr;
+use fuser::FileAttr;
 
 use std::path::Path;
 

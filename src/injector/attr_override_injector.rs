@@ -5,7 +5,7 @@ use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, Fil
 use crate::hookfs::Result;
 
 use async_trait::async_trait;
-use fuse::{FileAttr, FileType};
+use fuser::{FileAttr, FileType};
 use log::{debug, trace};
 use time::Timespec;
 
@@ -18,9 +18,9 @@ pub struct AttrOverrideInjector {
     ino: Option<u64>,
     size: Option<u64>,
     blocks: Option<u64>,
-    atime: Option<Timespec>,
-    mtime: Option<Timespec>,
-    ctime: Option<Timespec>,
+    atime: Option<std::time::SystemTime>,
+    mtime: Option<std::time::SystemTime>,
+    ctime: Option<std::time::SystemTime>,
     kind: Option<FileType>,
     perm: Option<u16>,
     nlink: Option<u32>,
@@ -102,18 +102,9 @@ impl AttrOverrideInjector {
             percent: conf.percent,
         })?;
 
-        let atime = conf.atime.map(|item| Timespec {
-            sec: item.sec,
-            nsec: item.nsec,
-        });
-        let mtime = conf.mtime.map(|item| Timespec {
-            sec: item.sec,
-            nsec: item.nsec,
-        });
-        let ctime = conf.ctime.map(|item| Timespec {
-            sec: item.sec,
-            nsec: item.nsec,
-        });
+        let atime = conf.atime;
+        let mtime = conf.mtime;
+        let ctime = conf.ctime;
 
         let kind = conf.kind.map(|item| match item {
             ConfigFileType::Directory => FileType::Directory,

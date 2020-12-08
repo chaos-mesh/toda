@@ -56,9 +56,7 @@ impl PtraceManager {
                             Ok(status) => {
                                 info!("wait status: {:?}", status);
                             }
-                            Err(err) => {
-                                warn!("fail to wait for process({}): {:?}", pid, err)
-                            }
+                            Err(err) => warn!("fail to wait for process({}): {:?}", pid, err),
                         }
                     }
                 }
@@ -72,9 +70,7 @@ impl PtraceManager {
             }
         }
 
-        Ok(TracedProcess {
-            pid: raw_pid,
-        })
+        Ok(TracedProcess { pid: raw_pid })
     }
 
     pub fn detach(&self, pid: i32) -> Result<()> {

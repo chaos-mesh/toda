@@ -9,7 +9,7 @@ use crate::injector::MultiInjector;
 
 use async_trait::async_trait;
 use derive_more::{Deref, DerefMut, From};
-use fuse::*;
+use fuser::*;
 use slab::Slab;
 use time::Timespec;
 
@@ -261,6 +261,12 @@ fn convert_filetype(file_type: dir::Type) -> FileType {
     }
 }
 
+fn system_time(sec: i64, nsec: i64) -> std::time::SystemTime {
+    std::time::UNIX_EPOCH
+        + std::time::Duration::from_secs(sec as u64)
+        + std::time::Duration::from_nanos(nsec as u64)
+}
+
 // convert_libc_stat_to_fuse_stat converts file stat from libc form into fuse form.
 // returns None if the file type is unknown.
 fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
@@ -278,17 +284,19 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         ino: stat.st_ino,
         size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
-        atime: Timespec::new(stat.st_atime, stat.st_atime_nsec as i32),
-        mtime: Timespec::new(stat.st_mtime, stat.st_mtime_nsec as i32),
-        ctime: Timespec::new(stat.st_ctime, stat.st_ctime_nsec as i32),
+        atime: system_time(stat.st_atime, stat.st_atime_nsec),
+        mtime: system_time(stat.st_mtime, stat.st_mtime_nsec),
+        ctime: system_time(stat.st_ctime, stat.st_ctime_nsec),
         kind,
         perm: (stat.st_mode & 0o777) as u16,
         nlink: stat.st_nlink as u32,
         uid: stat.st_uid,
         gid: stat.st_gid,
         rdev: stat.st_rdev as u32,
-        crtime: Timespec::new(0, 0), // It's macOS only
-        flags: 0,                    // It's macOS only
+        blksize: stat.st_blksize as u32,
+        padding: 0,                // unknown attr
+        crtime: system_time(0, 0), // It's macOS only
+        flags: 0,                  // It's macOS only
     })
 }
 
@@ -320,6 +328,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn lookup(&self, parent: u64, name: OsString) -> Result<Entry> {
         trace!("lookup");
+        let start_time = std::time::Instant::now();
 
         let path = {
             let inode_map = self.inode_map.read().await;
@@ -341,7 +350,8 @@ impl AsyncFileSystemImpl for HookFs {
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with {:?}", stat);
 
-        let mut reply = Entry::new(stat, 0);
+        let finish_time = std::time::Instant::now();
+        let mut reply = Entry::new(finish_time - start_time, stat, 0);
         trace!("before inject {:?}", reply);
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
         trace!("after inject {:?}", reply);
@@ -356,6 +366,7 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn getattr(&self, ino: u64) -> Result<Attr> {
         trace!("getattr");
+        let start_time = std::time::Instant::now();
 
         let path = {
             let inode_map = self.inode_map.read().await;
@@ -368,7 +379,8 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("return with {:?}", stat);
 
-        let mut reply = Attr::new(stat);
+        let finish_time = std::time::Instant::now();
+        let mut reply = Attr::new(finish_time - start_time, stat);
         trace!("before inject {:?}", reply);
         inject_reply!(self, GETATTR, path, reply, Attr);
         trace!("after inject {:?}", reply);
@@ -383,13 +395,14 @@ impl AsyncFileSystemImpl for HookFs {
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
-        _fh: Option<u64>,
-        _crtime: Option<Timespec>,
-        _chgtime: Option<Timespec>,
-        _bkuptime: Option<Timespec>,
-        _flags: Option<u32>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<std::time::SystemTime>,
+        fh: Option<u64>,
+        crtime: Option<std::time::SystemTime>,
+        chgtime: Option<std::time::SystemTime>,
+        bkuptime: Option<std::time::SystemTime>,
+        flags: Option<u32>,
     ) -> Result<Attr> {
         trace!("setattr");
 
@@ -411,9 +424,24 @@ impl AsyncFileSystemImpl for HookFs {
             async_truncate(&path, size as i64).await?;
         }
 
-        if let (Some(atime), Some(mtime)) = (atime, mtime) {
-            let atime = TimeVal::seconds(atime.sec) + TimeVal::nanoseconds(atime.nsec as i64);
-            let mtime = TimeVal::seconds(mtime.sec) + TimeVal::nanoseconds(mtime.nsec as i64);
+        if let (Some(TimeOrNow::SpecificTime(atime)), Some(TimeOrNow::SpecificTime(mtime))) =
+            (atime, mtime)
+        {
+            // TODO: handle error here
+            let atime = atime
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64;
+            let mtime = mtime
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64;
+
+            let nano_unit = 1e9 as i64;
+            let atime =
+                TimeVal::seconds(atime / nano_unit) + TimeVal::nanoseconds(atime % nano_unit);
+            let mtime =
+                TimeVal::seconds(mtime / nano_unit) + TimeVal::nanoseconds(mtime % nano_unit);
             // TODO: check whether one of them is Some
             async_utimes(&path, atime, mtime).await?;
         }
@@ -445,7 +473,14 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    async fn mknod(&self, parent: u64, name: OsString, mode: u32, rdev: u32) -> Result<Entry> {
+    async fn mknod(
+        &self,
+        parent: u64,
+        name: OsString,
+        mode: u32,
+        umask: u32,
+        rdev: u32,
+    ) -> Result<Entry> {
         trace!("mknod");
 
         let path = {
@@ -465,7 +500,7 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(parent, name).await
     }
 
-    async fn mkdir(&self, parent: u64, name: OsString, mode: u32) -> Result<Entry> {
+    async fn mkdir(&self, parent: u64, name: OsString, umask: u32, mode: u32) -> Result<Entry> {
         trace!("mkdir");
 
         let path = {
@@ -543,6 +578,7 @@ impl AsyncFileSystemImpl for HookFs {
         name: OsString,
         newparent: u64,
         newname: OsString,
+        flags: u32,
     ) -> Result<()> {
         trace!("rename");
 
@@ -604,15 +640,15 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(newparent, newname).await
     }
 
-    async fn open(&self, ino: u64, flags: u32) -> Result<Open> {
+    async fn open(&self, ino: u64, flags: i32) -> Result<Open> {
         trace!("open");
         // TODO: support direct io
-        if flags & (libc::O_DIRECT as u32) != 0 {
+        if flags & libc::O_DIRECT != 0 {
             debug!("direct io flag is ignored directly")
         }
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
-        let filtered_flags = flags & (!(libc::O_APPEND as u32)) & (!(libc::O_DIRECT as u32));
+        let filtered_flags = flags & (!libc::O_APPEND) & (!libc::O_DIRECT);
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         let path = {
@@ -642,7 +678,15 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    async fn read(&self, _ino: u64, fh: u64, offset: i64, size: u32) -> Result<Data> {
+    async fn read(
+        &self,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+    ) -> Result<Data> {
         trace!("read");
 
         let mut opened_files = self.opened_files.write().await;
@@ -676,11 +720,13 @@ impl AsyncFileSystemImpl for HookFs {
 
     async fn write(
         &self,
-        _ino: u64,
+        ino: u64,
         fh: u64,
         offset: i64,
         data: Vec<u8>,
-        _flags: u32,
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
     ) -> Result<Write> {
         trace!("write");
 
@@ -719,8 +765,8 @@ impl AsyncFileSystemImpl for HookFs {
         &self,
         _ino: u64,
         fh: u64,
-        _flags: u32,
-        _lock_owner: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         _flush: bool,
     ) -> Result<()> {
         trace!("release");
@@ -747,7 +793,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
 
-    async fn opendir(&self, ino: u64, flags: u32) -> Result<Open> {
+    async fn opendir(&self, ino: u64, flags: i32) -> Result<Open> {
         trace!("opendir");
 
         let path = {
@@ -756,7 +802,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, OPENDIR, &path);
 
-        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = flags & (!libc::O_APPEND);
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         let path_clone = path.clone();
@@ -859,7 +905,7 @@ impl AsyncFileSystemImpl for HookFs {
         reply.ok();
     }
 
-    async fn releasedir(&self, _ino: u64, fh: u64, _flags: u32) -> Result<()> {
+    async fn releasedir(&self, _ino: u64, fh: u64, _flags: i32) -> Result<()> {
         trace!("releasedir");
 
         // FIXME: please implement releasedir
@@ -917,7 +963,7 @@ impl AsyncFileSystemImpl for HookFs {
         ino: u64,
         name: OsString,
         value: Vec<u8>,
-        flags: u32,
+        flags: i32,
         _position: u32,
     ) -> Result<()> {
         trace!("setxattr");
@@ -1053,7 +1099,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(())
     }
 
-    async fn access(&self, ino: u64, mask: u32) -> Result<()> {
+    async fn access(&self, ino: u64, mask: i32) -> Result<()> {
         trace!("access");
         let path = {
             let inode_map = self.inode_map.read().await;
@@ -1075,11 +1121,14 @@ impl AsyncFileSystemImpl for HookFs {
         parent: u64,
         name: OsString,
         mode: u32,
-        flags: u32,
+        umask: u32,
+        flags: i32,
         uid: u32,
         gid: u32,
     ) -> Result<Create> {
         trace!("create");
+        let start_time = std::time::Instant::now();
+
         let path = {
             let inode_map = self.inode_map.read().await;
             let parent_path = inode_map.get_path(parent)?;
@@ -1087,7 +1136,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, CREATE, path.as_path());
 
-        let filtered_flags = flags & (!(libc::O_APPEND as u32));
+        let filtered_flags = flags & (!libc::O_APPEND);
         let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
 
         let mode = stat::Mode::from_bits_truncate(mode);
@@ -1118,7 +1167,8 @@ impl AsyncFileSystemImpl for HookFs {
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
 
-        let mut reply = Create::new(stat, 0, fh as u64, flags);
+        let finish_time = std::time::Instant::now();
+        let mut reply = Create::new(finish_time - start_time, stat, 0, fh as u64, flags);
         trace!("before inject {:?}", reply);
         inject_reply!(self, CREATE, path.as_path(), reply, Create);
         trace!("after inject {:?}", reply);
@@ -1132,7 +1182,7 @@ impl AsyncFileSystemImpl for HookFs {
         _lock_owner: u64,
         _start: u64,
         _end: u64,
-        _typ: u32,
+        _typ: i32,
         _pid: u32,
     ) -> Result<Lock> {
         trace!("getlk");
@@ -1147,7 +1197,7 @@ impl AsyncFileSystemImpl for HookFs {
         _lock_owner: u64,
         _start: u64,
         _end: u64,
-        _typ: u32,
+        _typ: i32,
         _pid: u32,
         _sleep: bool,
     ) -> Result<()> {

@@ -97,8 +97,6 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     let path = path.canonicalize()?;
     let (_, new_path) = encode_path(&path)?;
 
-    let ptrace_manager = ptrace::PtraceManager::default();
-
     let mut replacer = UnionReplacer::new();
     replacer.prepare(&path, &new_path)?;
     info!("running replacer");
