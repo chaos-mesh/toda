@@ -1,11 +1,10 @@
 use crate::hookfs;
 use crate::injector::MultiInjector;
 use crate::mount;
-use crate::namespace::with_mnt_pid_namespace;
 use crate::stop;
 use crate::InjectorConfig;
 
-use crate::thread::JoinHandle;
+use std::thread::JoinHandle;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,45 +39,34 @@ impl MountInjectionGuard {
     }
 
     // This method should be called in host namespace
-    pub fn recover_mount(mut self, target_pid: i32) -> Result<()> {
+    pub fn recover_mount(mut self) -> Result<()> {
         let mount_point = self.original_path.clone();
 
-        with_mnt_pid_namespace(
-            box move || loop {
-                if let Err(err) = umount(mount_point.as_path()) {
-                    info!("umount returns error: {:?}", err);
-                } else {
-                    return Ok(());
-                }
-            },
-            target_pid,
-        )?
-        .join()?;
+        loop {
+            if let Err(err) = umount(mount_point.as_path()) {
+                info!("umount returns error: {:?}", err);
+            } else {
+                break
+            }
+        }
 
         info!("unmount successfully!");
         self.handler
             .take()
             .ok_or(anyhow!("handler is empty"))?
-            .join()?;
+            .join().unwrap()?;
 
         let new_path = self.new_path.clone();
         let original_path = self.original_path;
-        with_mnt_pid_namespace(
-            box move || {
-                let mounts = mount::MountsInfo::parse_mounts()?;
 
-                if mounts.non_root(&original_path)? {
-                    // TODO: make the parent mount points private before move mount points
-                    mounts.move_mount(new_path, original_path)?;
-                } else {
-                    return Err(anyhow!("inject on a root mount"));
-                }
+        let mounts = mount::MountsInfo::parse_mounts()?;
 
-                Ok(())
-            },
-            target_pid,
-        )?
-        .join()?;
+        if mounts.non_root(&original_path)? {
+            // TODO: make the parent mount points private before move mount points
+            mounts.move_mount(new_path, original_path)?;
+        } else {
+            return Err(anyhow!("inject on a root mount"));
+        }
 
         Ok(())
     }
@@ -113,26 +101,18 @@ impl MountInjector {
     }
 
     // This method should be called in host namespace
-    pub fn mount(&mut self, target_pid: i32) -> Result<MountInjectionGuard> {
+    pub fn mount(&mut self) -> Result<MountInjectionGuard> {
         let original_path = self.original_path.clone();
         let new_path = self.new_path.clone();
 
-        with_mnt_pid_namespace(
-            box move || -> Result<_> {
-                let mounts = mount::MountsInfo::parse_mounts()?;
+        let mounts = mount::MountsInfo::parse_mounts()?;
 
-                if mounts.non_root(&original_path)? {
-                    // TODO: make the parent mount points private before move mount points
-                    mounts.move_mount(original_path, new_path)?;
-                } else {
-                    return Err(anyhow!("inject on a root mount"));
-                }
-
-                Ok(())
-            },
-            target_pid,
-        )?
-        .join()?;
+        if mounts.non_root(&original_path)? {
+            // TODO: make the parent mount points private before move mount points
+            mounts.move_mount(original_path, new_path)?;
+        } else {
+            return Err(anyhow!("inject on a root mount"));
+        }
 
         let injectors = MultiInjector::build(self.injector_config.clone())?;
 
@@ -147,7 +127,7 @@ impl MountInjector {
         let cloned_hookfs = hookfs.clone();
 
         let (before_mount_waiter, before_mount_guard) = stop::lock();
-        let handler = with_mnt_pid_namespace(
+        let handler = std::thread::spawn(
             box move || {
                 let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
@@ -173,8 +153,7 @@ impl MountInjector {
 
                 Ok(())
             },
-            target_pid,
-        )?;
+        );
         info!("wait 1 second");
 
         // TODO: remove this. But wait for FUSE gets up

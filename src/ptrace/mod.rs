@@ -21,6 +21,14 @@ pub struct PtraceManager {
     counter: RefCell<HashMap<i32, i32>>,
 }
 
+thread_local! {
+    static ptrace_manager: PtraceManager = PtraceManager::default()
+}
+
+pub fn trace(pid: i32) -> Result<TracedProcess> {
+    ptrace_manager.with(|pm| pm.trace(pid))
+}
+
 impl PtraceManager {
     pub fn trace(&self, pid: i32) -> Result<TracedProcess> {
         let raw_pid = pid;
@@ -66,7 +74,6 @@ impl PtraceManager {
 
         Ok(TracedProcess {
             pid: raw_pid,
-            manager: self,
         })
     }
 
@@ -105,19 +112,18 @@ impl PtraceManager {
 }
 
 #[derive(Debug)]
-pub struct TracedProcess<'a> {
+pub struct TracedProcess {
     pub pid: i32,
-    manager: &'a PtraceManager,
 }
 
-impl<'a> Clone for TracedProcess<'a> {
+impl Clone for TracedProcess {
     fn clone(&self) -> Self {
         // TODO: handler error here
-        self.manager.trace(self.pid).unwrap()
+        ptrace_manager.with(|pm| pm.trace(self.pid)).unwrap()
     }
 }
 
-impl<'a> TracedProcess<'a> {
+impl TracedProcess {
     fn protect(&self) -> Result<ThreadGuard> {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
 
@@ -299,11 +305,11 @@ impl<'a> TracedProcess<'a> {
     }
 }
 
-impl<'a> Drop for TracedProcess<'a> {
+impl Drop for TracedProcess {
     fn drop(&mut self) {
         info!("dropping traced process: {}", self.pid);
 
-        if let Err(err) = self.manager.detach(self.pid) {
+        if let Err(err) = ptrace_manager.with(|pm| pm.detach(self.pid)) {
             info!(
                 "deteching process {} failed with error: {:?}",
                 self.pid, err

@@ -1,6 +1,6 @@
-use crate::ptrace;
-
 use super::Replacer;
+use super::utils::all_processes;
+use super::ptrace;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use log::{error, info, trace};
 
-use procfs::process::all_processes;
 use procfs::process::MMapPath;
 
 use anyhow::{anyhow, Result};
@@ -77,7 +76,7 @@ impl ProcessAccessorBuilder {
         }
     }
 
-    pub fn build<'a>(self, process: ptrace::TracedProcess<'a>) -> Result<ProcessAccessor<'a>> {
+    pub fn build(self, process: ptrace::TracedProcess) -> Result<ProcessAccessor> {
         Ok(ProcessAccessor {
             process,
 
@@ -141,20 +140,20 @@ impl FromIterator<ReplaceCase> for ProcessAccessorBuilder {
     }
 }
 
-struct ProcessAccessor<'a> {
-    process: ptrace::TracedProcess<'a>,
+struct ProcessAccessor {
+    process: ptrace::TracedProcess,
 
     cases: Vec<RawReplaceCase>,
     new_paths: Cursor<Vec<u8>>,
 }
 
-impl<'a> Debug for ProcessAccessor<'a> {
+impl Debug for ProcessAccessor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.process.fmt(f)
     }
 }
 
-impl<'a> ProcessAccessor<'a> {
+impl ProcessAccessor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
 
@@ -272,34 +271,25 @@ fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
     (prot.bits() as u64, flags.bits() as u64)
 }
 
-pub struct MmapReplacer<'a> {
-    processes: HashMap<i32, ProcessAccessor<'a>>,
+pub struct MmapReplacer {
+    processes: HashMap<i32, ProcessAccessor>,
 }
 
-impl<'a> MmapReplacer<'a> {
+impl MmapReplacer {
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
-        ptrace_manager: &'a ptrace::PtraceManager,
-    ) -> Result<MmapReplacer<'a>> {
+    ) -> Result<MmapReplacer> {
         info!("preparing mmap replacer");
 
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
         let processes = all_processes()?
-            .into_iter()
-            .filter(|process| -> bool {
-                if let Ok(stat) = process.stat() {
-                    !stat.comm.contains("toda")
-                } else {
-                    true
-                }
-            })
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
 
-                let traced_process = ptrace_manager.trace(pid).ok()?;
+                let traced_process = ptrace::trace(pid).ok()?;
                 let maps = process.maps().ok()?;
 
                 Some((traced_process, maps))
@@ -336,7 +326,7 @@ impl<'a> MmapReplacer<'a> {
             })
             .group_by(|(process, _)| process.pid)
             .into_iter()
-            .filter_map(|(pid, group)| Some((ptrace_manager.trace(pid).ok()?, group)))
+            .filter_map(|(pid, group)| Some((ptrace::trace(pid).ok()?, group)))
             .map(|(process, group)| (process, group.map(|(_, group)| group)))
             .filter_map(|(process, group)| {
                 let pid = process.pid;
@@ -355,7 +345,7 @@ impl<'a> MmapReplacer<'a> {
     }
 }
 
-impl<'a> Replacer for MmapReplacer<'a> {
+impl Replacer for MmapReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running mmap replacer");
         for (_, accessor) in self.processes.iter_mut() {

@@ -1,6 +1,6 @@
-use crate::ptrace;
-
 use super::Replacer;
+use super::utils::all_processes;
+use super::ptrace;
 
 use std::io::{Cursor, Read, Write};
 use std::iter::FromIterator;
@@ -13,7 +13,7 @@ use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 
 use log::{error, info, trace};
 
-use procfs::process::{all_processes, FDTarget};
+use procfs::process::FDTarget;
 
 use itertools::Itertools;
 
@@ -47,7 +47,7 @@ impl ProcessAccessorBuilder {
         }
     }
 
-    pub fn build<'a>(self, process: ptrace::TracedProcess<'a>) -> Result<ProcessAccessor<'a>> {
+    pub fn build(self, process: ptrace::TracedProcess) -> Result<ProcessAccessor> {
         Ok(ProcessAccessor {
             process,
 
@@ -89,20 +89,20 @@ impl FromIterator<(u64, PathBuf)> for ProcessAccessorBuilder {
     }
 }
 
-struct ProcessAccessor<'a> {
-    process: ptrace::TracedProcess<'a>,
+struct ProcessAccessor {
+    process: ptrace::TracedProcess,
 
     cases: Vec<ReplaceCase>,
     new_paths: Cursor<Vec<u8>>,
 }
 
-impl<'a> Debug for ProcessAccessor<'a> {
+impl Debug for ProcessAccessor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.process.fmt(f)
     }
 }
 
-impl<'a> ProcessAccessor<'a> {
+impl ProcessAccessor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.new_paths.set_position(0);
 
@@ -193,34 +193,25 @@ impl<'a> ProcessAccessor<'a> {
     }
 }
 
-pub struct FdReplacer<'a> {
-    processes: HashMap<i32, ProcessAccessor<'a>>,
+pub struct FdReplacer {
+    processes: HashMap<i32, ProcessAccessor>,
 }
 
-impl<'a> FdReplacer<'a> {
+impl FdReplacer {
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         detect_path: P1,
         new_path: P2,
-        ptrace_manager: &'a ptrace::PtraceManager,
-    ) -> Result<FdReplacer<'a>> {
+    ) -> Result<FdReplacer> {
         info!("preparing fd replacer");
 
         let detect_path = detect_path.as_ref();
         let new_path = new_path.as_ref();
 
         let processes = all_processes()?
-            .into_iter()
-            .filter(|process| -> bool {
-                if let Ok(stat) = process.stat() {
-                    !stat.comm.contains("toda")
-                } else {
-                    true
-                }
-            })
             .filter_map(|process| -> Option<_> {
                 let pid = process.pid;
 
-                let traced_process = match ptrace_manager.trace(pid) {
+                let traced_process = match ptrace::trace(pid) {
                     Ok(p) => p,
                     Err(err) => {
                         error!("fail to trace process: {} {}", pid, err);
@@ -246,7 +237,7 @@ impl<'a> FdReplacer<'a> {
             })
             .group_by(|(process, _)| process.pid)
             .into_iter()
-            .filter_map(|(pid, group)| Some((ptrace_manager.trace(pid).ok()?, group)))
+            .filter_map(|(pid, group)| Some((ptrace::trace(pid).ok()?, group)))
             .map(|(process, group)| (process, group.map(|(_, group)| group)))
             .filter_map(|(process, group)| {
                 let pid = process.pid;
@@ -264,7 +255,7 @@ impl<'a> FdReplacer<'a> {
     }
 }
 
-impl<'a> Replacer for FdReplacer<'a> {
+impl Replacer for FdReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");
         for (_, accessor) in self.processes.iter_mut() {

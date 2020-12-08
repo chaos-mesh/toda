@@ -7,6 +7,7 @@ use anyhow::Result;
 mod cwd_replacer;
 mod fd_replacer;
 mod mmap_replacer;
+mod utils;
 
 use log::error;
 
@@ -27,19 +28,18 @@ impl<'a> UnionReplacer<'a> {
 
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         &mut self,
-        ptrace_manager: &'a ptrace::PtraceManager,
         detect_path: P1,
         new_path: P2,
     ) -> Result<()> {
-        match FdReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
+        match FdReplacer::prepare(&detect_path, &new_path) {
             Err(err) => error!("Error while preparing fd replacer: {:?}", err),
             Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
-        match CwdReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
+        match CwdReplacer::prepare(&detect_path, &new_path) {
             Err(err) => error!("Error while preparing cwd replacer: {:?}", err),
             Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
-        match MmapReplacer::prepare(&detect_path, &new_path, ptrace_manager) {
+        match MmapReplacer::prepare(&detect_path, &new_path) {
             Err(err) => error!("Error while preparing mmap replacer: {:?}", err),
             Ok(replacer) => self.replacers.push(Box::new(replacer)),
         }
