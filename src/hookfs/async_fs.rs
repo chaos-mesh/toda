@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use fuser::*;
 
-
 use super::errors::Result;
 use super::reply::*;
 use super::runtime::spawn;

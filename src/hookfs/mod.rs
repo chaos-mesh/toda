@@ -12,7 +12,6 @@ use derive_more::{Deref, DerefMut, From};
 use fuser::*;
 use slab::Slab;
 
-
 use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
 
 use nix::dir;

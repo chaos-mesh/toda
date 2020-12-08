@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use fuser::{FileAttr, FileType};
 use log::{debug, trace};
 
-
 use std::path::Path;
 
 #[derive(Debug)]

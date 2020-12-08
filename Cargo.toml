@@ -10,7 +10,7 @@ edition = "2018"
 structopt = "0.3"
 nix = "0.18"
 anyhow = "1.0"
-fuser = "0.6"
+fuser = {version = "0.6", features = ["abi-7-11"]}
 time = "0.1"
 libc = "0.2"
 async-trait = "0.1"
