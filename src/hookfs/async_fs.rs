@@ -68,7 +68,15 @@ pub trait AsyncFileSystemImpl: Send + Sync {
         rdev: u32,
     ) -> Result<Entry>;
 
-    async fn mkdir(&self, parent: u64, name: OsString, umask: u32, mode: u32) -> Result<Entry>;
+    async fn mkdir(
+        &self,
+        parent: u64,
+        name: OsString,
+        mode: u32,
+        umask: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry>;
 
     async fn unlink(&self, parent: u64, name: OsString) -> Result<()>;
 
@@ -300,10 +308,15 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         umask: u32,
         reply: ReplyEntry,
     ) {
+        let uid = req.uid();
+        let gid = req.gid();
+
         let async_impl = self.0.clone();
         let name = name.to_owned();
         spawn_reply(req.unique(), reply, async move {
-            async_impl.mkdir(parent, name, umask, mode).await
+            async_impl
+                .mkdir(parent, name, mode, umask, uid, gid)
+                .await
         });
     }
     fn unlink(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {

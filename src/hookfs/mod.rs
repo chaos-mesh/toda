@@ -21,8 +21,8 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fchown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
-    LinkatFlags, Uid,
+    chown, fchown, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags,
+    FchownatFlags, Gid, LinkatFlags, Uid,
 };
 
 use tokio::fs;
@@ -499,7 +499,15 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(parent, name).await
     }
 
-    async fn mkdir(&self, parent: u64, name: OsString, _umask: u32, mode: u32) -> Result<Entry> {
+    async fn mkdir(
+        &self,
+        parent: u64,
+        name: OsString,
+        mode: u32,
+        _umask: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry> {
         trace!("mkdir");
 
         let path = {
@@ -510,7 +518,17 @@ impl AsyncFileSystemImpl for HookFs {
         inject!(self, MKDIR, path.as_path());
 
         let mode = stat::Mode::from_bits_truncate(mode);
+        trace!("create directory with mode: {:?}", mode);
         async_mkdir(&path, mode).await?;
+        trace!("setting owner {}:{}", uid, gid);
+        fchownat(
+            Option::None,
+            &path,
+            Some(Uid::from_raw(uid)),
+            Some(Gid::from_raw(gid)),
+            FchownatFlags::FollowSymlink,
+        );
+
         self.lookup(parent, name).await
     }
 
