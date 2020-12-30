@@ -527,7 +527,7 @@ impl AsyncFileSystemImpl for HookFs {
             Some(Uid::from_raw(uid)),
             Some(Gid::from_raw(gid)),
             FchownatFlags::FollowSymlink,
-        );
+        )?;
 
         self.lookup(parent, name).await
     }
