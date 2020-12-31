@@ -82,7 +82,14 @@ pub trait AsyncFileSystemImpl: Send + Sync {
 
     async fn rmdir(&self, parent: u64, name: OsString) -> Result<()>;
 
-    async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry>;
+    async fn symlink(
+        &self,
+        parent: u64,
+        name: OsString,
+        link: PathBuf,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry>;
 
     async fn rename(
         &self,

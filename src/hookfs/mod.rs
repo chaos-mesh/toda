@@ -413,7 +413,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, SETATTR, &path);
 
-        async_lchown(&path, uid, gid).await?;
+        async_lchown(&path, uid, gid)?;
 
         if let Some(mode) = mode {
             async_fchmodat(&path, mode).await?;
@@ -521,7 +521,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create directory with mode: {:?}", mode);
         async_mkdir(&path, mode).await?;
         trace!("setting owner {}:{}", uid, gid);
-        async_lchown(&path, Some(uid), Some(gid)).await?;
+        async_lchown(&path, Some(uid), Some(gid))?;
 
         self.lookup(parent, name).await
     }
@@ -566,7 +566,14 @@ impl AsyncFileSystemImpl for HookFs {
         }
     }
 
-    async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
+    async fn symlink(
+        &self,
+        parent: u64,
+        name: OsString,
+        link: PathBuf,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry> {
         trace!("symlink");
 
         let path = {
@@ -579,6 +586,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create symlink: {} => {}", path.display(), link.display());
 
         spawn_blocking(move || symlinkat(&link, None, &path)).await??;
+
+        trace!("setting owner {}:{}", uid, gid);
+        async_lchown(&link, Some(uid), Some(gid))?;
 
         self.lookup(parent, name).await
     }
