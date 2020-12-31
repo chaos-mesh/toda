@@ -1165,7 +1165,7 @@ impl AsyncFileSystemImpl for HookFs {
         let mode = stat::Mode::from_bits_truncate(mode);
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
-
+        let fd = async_open(&path, filtered_flags, mode).await?;
         trace!("setting owner {}:{} for file", uid, gid);
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
@@ -1177,7 +1177,6 @@ impl AsyncFileSystemImpl for HookFs {
             .await
             .insert_path(stat.ino, path.clone());
 
-        let fd = async_open(&path, filtered_flags, mode).await?;
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);
         let fh = self
