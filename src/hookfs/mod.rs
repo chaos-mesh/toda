@@ -21,8 +21,8 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fchown, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags,
-    FchownatFlags, Gid, LinkatFlags, Uid,
+    chown, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
+    Gid, LinkatFlags, Uid,
 };
 
 use tokio::fs;
@@ -413,7 +413,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, SETATTR, &path);
 
-        async_chown(&path, uid, gid).await?;
+        async_lchown(&path, uid, gid).await?;
 
         if let Some(mode) = mode {
             async_fchmodat(&path, mode).await?;
@@ -521,13 +521,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create directory with mode: {:?}", mode);
         async_mkdir(&path, mode).await?;
         trace!("setting owner {}:{}", uid, gid);
-        fchownat(
-            Option::None,
-            &path,
-            Some(Uid::from_raw(uid)),
-            Some(Gid::from_raw(gid)),
-            FchownatFlags::FollowSymlink,
-        )?;
+        async_lchown(&path, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
     }
@@ -1162,7 +1156,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let fd = async_open(&path, filtered_flags, mode).await?;
         trace!("setting owner {}:{} for file", uid, gid);
-        fchown(fd, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))?;
+        async_lchown(fd, Some(uid), Some(gid))?;
 
         let stat = self.get_file_attr(&path).await?;
 
@@ -1234,10 +1228,18 @@ async fn async_stat(path: &Path) -> Result<stat::FileStat> {
     Ok(spawn_blocking(move || stat::lstat(&path_clone)).await??)
 }
 
-async fn async_chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+async fn async_lchown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let path_clone = path.to_path_buf();
-    spawn_blocking(move || chown(&path_clone, uid.map(Uid::from_raw), gid.map(Gid::from_raw)))
-        .await??;
+    spawn_blocking(move || {
+        fchownat(
+            None,
+            &path_clone,
+            uid.map(Uid::from_raw),
+            gid.map(Gid::from_raw),
+            FchownatFlags::NoFollowSymlink,
+        )
+    })
+    .await??;
     Ok(())
 }
 

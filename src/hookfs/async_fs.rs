@@ -314,9 +314,7 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let async_impl = self.0.clone();
         let name = name.to_owned();
         spawn_reply(req.unique(), reply, async move {
-            async_impl
-                .mkdir(parent, name, mode, umask, uid, gid)
-                .await
+            async_impl.mkdir(parent, name, mode, umask, uid, gid).await
         });
     }
     fn unlink(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
