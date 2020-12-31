@@ -21,7 +21,7 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
+    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
     Gid, LinkatFlags, Uid,
 };
 
@@ -413,7 +413,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, SETATTR, &path);
 
-        async_lchown(&path, uid, gid)?;
+        async_lchown(&path, uid, gid).await?;
 
         if let Some(mode) = mode {
             async_fchmodat(&path, mode).await?;
@@ -521,7 +521,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create directory with mode: {:?}", mode);
         async_mkdir(&path, mode).await?;
         trace!("setting owner {}:{}", uid, gid);
-        async_lchown(&path, Some(uid), Some(gid))?;
+        async_lchown(&path, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
     }
@@ -588,7 +588,7 @@ impl AsyncFileSystemImpl for HookFs {
         spawn_blocking(move || symlinkat(&link, None, &path)).await??;
 
         trace!("setting owner {}:{}", uid, gid);
-        async_lchown(&link, Some(uid), Some(gid))?;
+        async_lchown(&link, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
     }
@@ -1166,7 +1166,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let fd = async_open(&path, filtered_flags, mode).await?;
         trace!("setting owner {}:{} for file", uid, gid);
-        async_lchown(fd, Some(uid), Some(gid))?;
+        async_lchown(fd, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
 
