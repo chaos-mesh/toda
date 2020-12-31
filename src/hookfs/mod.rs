@@ -21,8 +21,8 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
-    Gid, LinkatFlags, Uid,
+    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
+    LinkatFlags, Uid,
 };
 
 use tokio::fs;
@@ -585,7 +585,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("create symlink: {} => {}", path.display(), link.display());
 
-        spawn_blocking(move || symlinkat(&link, None, &path)).await??;
+        let cloned_link = link.clone();
+
+        spawn_blocking(move || symlinkat(&cloned_link, None, &path)).await??;
 
         trace!("setting owner {}:{}", uid, gid);
         async_lchown(&link, Some(uid), Some(gid)).await?;
@@ -1164,9 +1166,8 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
 
-        let fd = async_open(&path, filtered_flags, mode).await?;
         trace!("setting owner {}:{} for file", uid, gid);
-        async_lchown(fd, Some(uid), Some(gid)).await?;
+        async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
 
@@ -1176,6 +1177,7 @@ impl AsyncFileSystemImpl for HookFs {
             .await
             .insert_path(stat.ino, path.clone());
 
+        let fd = async_open(&path, filtered_flags, mode).await?;
         let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
         let file = fs::File::from_std(std_file);
         let fh = self

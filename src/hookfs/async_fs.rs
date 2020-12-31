@@ -349,8 +349,10 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let async_impl = self.0.clone();
         let name = name.to_owned();
         let link = link.to_owned();
+        let uid = req.uid();
+        let gid = req.gid();
         spawn_reply(req.unique(), reply, async move {
-            async_impl.symlink(parent, name, link).await
+            async_impl.symlink(parent, name, link, uid, gid).await
         });
     }
     fn rename(
