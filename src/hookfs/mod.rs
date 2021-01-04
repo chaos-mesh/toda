@@ -21,7 +21,7 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
-    chown, fchown, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid,
+    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
     LinkatFlags, Uid,
 };
 
@@ -413,7 +413,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
         inject!(self, SETATTR, &path);
 
-        async_chown(&path, uid, gid).await?;
+        async_lchown(&path, uid, gid).await?;
 
         if let Some(mode) = mode {
             async_fchmodat(&path, mode).await?;
@@ -499,7 +499,15 @@ impl AsyncFileSystemImpl for HookFs {
         self.lookup(parent, name).await
     }
 
-    async fn mkdir(&self, parent: u64, name: OsString, _umask: u32, mode: u32) -> Result<Entry> {
+    async fn mkdir(
+        &self,
+        parent: u64,
+        name: OsString,
+        mode: u32,
+        _umask: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry> {
         trace!("mkdir");
 
         let path = {
@@ -510,7 +518,11 @@ impl AsyncFileSystemImpl for HookFs {
         inject!(self, MKDIR, path.as_path());
 
         let mode = stat::Mode::from_bits_truncate(mode);
+        trace!("create directory with mode: {:?}", mode);
         async_mkdir(&path, mode).await?;
+        trace!("setting owner {}:{}", uid, gid);
+        async_lchown(&path, Some(uid), Some(gid)).await?;
+
         self.lookup(parent, name).await
     }
 
@@ -554,7 +566,14 @@ impl AsyncFileSystemImpl for HookFs {
         }
     }
 
-    async fn symlink(&self, parent: u64, name: OsString, link: PathBuf) -> Result<Entry> {
+    async fn symlink(
+        &self,
+        parent: u64,
+        name: OsString,
+        link: PathBuf,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Entry> {
         trace!("symlink");
 
         let path = {
@@ -566,7 +585,12 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("create symlink: {} => {}", path.display(), link.display());
 
-        spawn_blocking(move || symlinkat(&link, None, &path)).await??;
+        let cloned_link = link.clone();
+
+        spawn_blocking(move || symlinkat(&cloned_link, None, &path)).await??;
+
+        trace!("setting owner {}:{}", uid, gid);
+        async_lchown(&link, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
     }
@@ -1141,10 +1165,9 @@ impl AsyncFileSystemImpl for HookFs {
         let mode = stat::Mode::from_bits_truncate(mode);
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
-
         let fd = async_open(&path, filtered_flags, mode).await?;
         trace!("setting owner {}:{} for file", uid, gid);
-        fchown(fd, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))?;
+        async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
 
@@ -1216,10 +1239,18 @@ async fn async_stat(path: &Path) -> Result<stat::FileStat> {
     Ok(spawn_blocking(move || stat::lstat(&path_clone)).await??)
 }
 
-async fn async_chown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+async fn async_lchown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let path_clone = path.to_path_buf();
-    spawn_blocking(move || chown(&path_clone, uid.map(Uid::from_raw), gid.map(Gid::from_raw)))
-        .await??;
+    spawn_blocking(move || {
+        fchownat(
+            None,
+            &path_clone,
+            uid.map(Uid::from_raw),
+            gid.map(Gid::from_raw),
+            FchownatFlags::NoFollowSymlink,
+        )
+    })
+    .await??;
     Ok(())
 }
 
