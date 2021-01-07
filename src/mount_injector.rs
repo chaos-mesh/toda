@@ -15,6 +15,8 @@ use nix::mount::umount;
 
 use log::info;
 
+use retry::{retry, delay::Fixed, OperationResult};
+
 #[derive(Debug)]
 pub struct MountInjector {
     original_path: PathBuf,
@@ -38,17 +40,17 @@ impl MountInjectionGuard {
         self.hookfs.disable_injection();
     }
 
-    // This method should be called in host namespace
     pub fn recover_mount(mut self) -> Result<()> {
         let mount_point = self.original_path.clone();
 
-        loop {
+        retry(Fixed::from_millis(200).take(10), || {
             if let Err(err) = umount(mount_point.as_path()) {
                 info!("umount returns error: {:?}", err);
+                return OperationResult::Retry(err)
             } else {
-                break;
+                return OperationResult::Ok(())
             }
-        }
+        })?;
 
         info!("unmount successfully!");
         self.handler
