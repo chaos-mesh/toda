@@ -52,7 +52,7 @@ impl PtraceManager {
                         info!("attach task: {} successfully", task.tid);
 
                         // TODO: check wait result
-                        match wait::waitpid(pid, None) {
+                        match wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL)) {
                             Ok(status) => {
                                 info!("wait status: {:?}", status);
                             }
