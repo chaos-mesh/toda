@@ -318,6 +318,8 @@ impl AsyncFileSystemImpl for HookFs {
     fn init(&self) -> Result<()> {
         trace!("init");
 
+        stat::umask(stat::Mode::from_bits_truncate(0));
+
         Ok(())
     }
 
@@ -494,10 +496,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("mknod for {:?}", cpath);
 
-        let ret = async_mknod(cpath, mode, rdev as u64).await?;
-        if ret == -1 {
-            return Err(Error::last());
-        }
+        async_mknod(cpath, mode, rdev as u64).await?;
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
@@ -561,13 +560,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
-        let ret = async_rmdir(path).await?;
+        async_rmdir(path).await?;
 
-        if ret == -1 {
-            Err(Error::last())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     async fn symlink(
@@ -1288,13 +1283,18 @@ async fn async_readlink(path: &Path) -> Result<OsString> {
     Ok(spawn_blocking(move || readlink(&path_clone)).await??)
 }
 
-async fn async_mknod(path: CString, mode: u32, rdev: u64) -> Result<i32> {
-    let ret = spawn_blocking(move || {
+async fn async_mknod(path: CString, mode: u32, rdev: u64) -> Result<()> {
+    spawn_blocking(move || {
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
-        unsafe { libc::mknod(path_ptr, mode, rdev) }
+        let ret = unsafe { libc::mknod(path_ptr, mode, rdev) };
+
+        if ret != 0 {
+            Err(Error::last())
+        } else {
+            Ok(())
+        }
     })
-    .await?;
-    Ok(ret)
+    .await?
 }
 
 async fn async_mkdir(path: &Path, mode: stat::Mode) -> Result<()> {
@@ -1309,13 +1309,18 @@ async fn async_unlink(path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn async_rmdir(path: CString) -> Result<i32> {
-    let ret = spawn_blocking(move || {
+async fn async_rmdir(path: CString) -> Result<()> {
+    spawn_blocking(move || {
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
-        unsafe { libc::rmdir(path_ptr) }
+        let ret = unsafe { libc::rmdir(path_ptr) };
+
+        if ret != 0 {
+            Err(Error::last())
+        } else {
+            Ok(())
+        }
     })
-    .await?;
-    Ok(ret)
+    .await?
 }
 
 async fn async_open(path: &Path, filtered_flags: OFlag, mode: stat::Mode) -> Result<RawFd> {
