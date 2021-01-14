@@ -287,7 +287,7 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         mtime: system_time(stat.st_mtime, stat.st_mtime_nsec),
         ctime: system_time(stat.st_ctime, stat.st_ctime_nsec),
         kind,
-        perm: (stat.st_mode & 0o777) as u16,
+        perm: (stat.st_mode & 0o7777) as u16,
         nlink: stat.st_nlink as u32,
         uid: stat.st_uid,
         gid: stat.st_gid,
