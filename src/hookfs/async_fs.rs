@@ -66,6 +66,8 @@ pub trait AsyncFileSystemImpl: Send + Sync {
         mode: u32,
         umask: u32,
         rdev: u32,
+        uid: u32,
+        gid: u32,
     ) -> Result<Entry>;
 
     async fn mkdir(
@@ -302,8 +304,10 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
     ) {
         let async_impl = self.0.clone();
         let name = name.to_owned();
+        let uid = req.uid();
+        let gid = req.gid();
         spawn_reply(req.unique(), reply, async move {
-            async_impl.mknod(parent, name, mode, umask, rdev).await
+            async_impl.mknod(parent, name, mode, umask, rdev, uid, gid).await
         });
     }
     fn mkdir(

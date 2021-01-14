@@ -479,6 +479,8 @@ impl AsyncFileSystemImpl for HookFs {
         mode: u32,
         _umask: u32,
         rdev: u32,
+        uid: u32,
+        gid: u32,
     ) -> Result<Entry> {
         trace!("mknod");
 
@@ -488,14 +490,16 @@ impl AsyncFileSystemImpl for HookFs {
             parent_path.join(&name)
         };
         inject!(self, MKNOD, path.as_path());
-        let path = CString::new(path.as_os_str().as_bytes())?;
+        let cpath = CString::new(path.as_os_str().as_bytes())?;
 
-        trace!("mknod for {:?}", path);
+        trace!("mknod for {:?}", cpath);
 
-        let ret = async_mknod(path, mode, rdev as u64).await?;
+        let ret = async_mknod(cpath, mode, rdev as u64).await?;
         if ret == -1 {
             return Err(Error::last());
         }
+        async_lchown(&path, Some(uid), Some(gid)).await?;
+
         self.lookup(parent, name).await
     }
 
@@ -585,12 +589,11 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("create symlink: {} => {}", path.display(), link.display());
 
-        let cloned_link = link.clone();
-
-        spawn_blocking(move || symlinkat(&cloned_link, None, &path)).await??;
+        let cloned_path = path.clone();
+        spawn_blocking(move || symlinkat(&link, None, &path)).await??;
 
         trace!("setting owner {}:{}", uid, gid);
-        async_lchown(&link, Some(uid), Some(gid)).await?;
+        async_lchown(&cloned_path, Some(uid), Some(gid)).await?;
 
         self.lookup(parent, name).await
     }
@@ -1287,7 +1290,7 @@ async fn async_readlink(path: &Path) -> Result<OsString> {
 
 async fn async_mknod(path: CString, mode: u32, rdev: u64) -> Result<i32> {
     let ret = spawn_blocking(move || {
-        let path_ptr = path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
         unsafe { libc::mknod(path_ptr, mode, rdev) }
     })
     .await?;
@@ -1308,7 +1311,7 @@ async fn async_unlink(path: &Path) -> Result<()> {
 
 async fn async_rmdir(path: CString) -> Result<i32> {
     let ret = spawn_blocking(move || {
-        let path_ptr = path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
         unsafe { libc::rmdir(path_ptr) }
     })
     .await?;
