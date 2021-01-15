@@ -608,26 +608,30 @@ impl AsyncFileSystemImpl for HookFs {
 
         let mut inode_map = self.inode_map.write().await;
         let parent_path = inode_map.get_path(parent)?;
-        let path = parent_path.join(&name);
-        trace!("get original path: {}", path.display());
-        inject!(self, RENAME, path.as_path());
+        let old_path = parent_path.join(&name);
+        trace!("get original path: {}", old_path.display());
+        inject!(self, RENAME, old_path.as_path());
 
         let new_parent_path = inode_map.get_path(newparent)?;
         let new_path = new_parent_path.join(&newname);
 
         trace!("get new path: {}", new_path.display());
-
-        trace!("rename from {} to {}", path.display(), new_path.display());
+        trace!("rename from {} to {}", old_path.display(), new_path.display());
+        let new_path_old_ino = self.get_file_attr(&new_path).await.map(|attr| attr.ino);
 
         let new_path_clone = new_path.clone();
-        let path_clone = path.clone();
-        spawn_blocking(move || renameat(None, &path_clone, None, &new_path_clone)).await??;
+        let old_path_clone = old_path.clone();
+        spawn_blocking(move || renameat(None, &old_path_clone, None, &new_path_clone)).await??;
 
         let stat = self.get_file_attr(&new_path).await?;
-
         trace!("insert ({}, {})", stat.ino, new_path.display());
-        inode_map.remove_path(stat.ino, &path);
-        inode_map.insert_path(stat.ino, new_path);
+        inode_map.remove_path(stat.ino, &old_path);
+        inode_map.insert_path(stat.ino, &new_path);
+
+        if let Ok(ino ) = new_path_old_ino {
+            trace!("remove ({}, {}) from inode_map", ino, new_path.display());
+            inode_map.remove_path(ino, &new_path);
+        }
 
         Ok(())
     }
