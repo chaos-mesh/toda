@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "toda"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "async-trait",

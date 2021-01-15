@@ -1,6 +1,6 @@
 [package]
 name = "toda"
-version = "0.1.14"
+version = "0.1.15"
 authors = ["Yang Keao <keao.yang@yahoo.com>"]
 edition = "2018"
 
