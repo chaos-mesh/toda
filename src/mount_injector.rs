@@ -43,7 +43,7 @@ impl MountInjectionGuard {
     pub fn recover_mount(mut self) -> Result<()> {
         let mount_point = self.original_path.clone();
 
-        retry(Fixed::from_millis(200).take(10), || {
+        retry(Fixed::from_millis(500).take(20), || {
             if let Err(err) = umount(mount_point.as_path()) {
                 info!("umount returns error: {:?}", err);
                 return OperationResult::Retry(err);

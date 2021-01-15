@@ -39,9 +39,9 @@ impl PtraceManager {
         match counter_ref.get_mut(&raw_pid) {
             Some(count) => *count += 1,
             None => {
-                info!("send SIGSTOP to process: {}", pid);
+                trace!("send SIGSTOP to process: {}", pid);
                 kill(pid, Signal::SIGSTOP)?;
-                info!("stop {} successfully", pid);
+                trace!("stop {} successfully", pid);
 
                 let process = procfs::process::Process::new(raw_pid)?;
                 for task in process.tasks()? {
@@ -49,7 +49,13 @@ impl PtraceManager {
                         let pid = Pid::from_raw(task.tid);
 
                         info!("attach task: {}", task.tid);
-                        ptrace::attach(pid)?;
+                        match ptrace::attach(pid) {
+                            Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
+                                info!("task {} doesn't exist, maybe has stopped", task.tid)
+                            }
+                            Err(err) => {return Err(err.into())}
+                            _ => {}
+                        }
                         info!("attach task: {} successfully", task.tid);
 
                         // TODO: check wait result
@@ -92,7 +98,7 @@ impl PtraceManager {
                                     match ptrace::detach(Pid::from_raw(task.tid), None) {
                                         Ok(()) => {}
                                         Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
-                                            // ignore because the task could be newly created
+                                            info!("task {} doesn't exist, maybe has stopped", task.tid)
                                         }
                                         Err(err) => return Err(err.into()),
                                     }
