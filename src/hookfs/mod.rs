@@ -117,7 +117,7 @@ impl InodeMap {
             .insert(path.as_ref().to_owned());
     }
 
-    fn remove_path<P: AsRef<Path>>(&mut self, inode: &u64, path: P) {
+    fn remove_path<P: AsRef<Path>>(&mut self, inode: u64, path: P) {
         match self.0.get_mut(&inode) {
             Some(set) => {
                 set.remove(path.as_ref());
@@ -541,7 +541,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = self.get_file_attr(&path).await?;
         trace!("remove {} from inode_map", &stat.ino);
-        self.inode_map.write().await.remove_path(&stat.ino, &path);
+        self.inode_map.write().await.remove_path(stat.ino, &path);
 
         trace!("unlinking {}", path.display());
         async_unlink(&path).await?;
@@ -617,11 +617,13 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("rename from {} to {}", path.display(), new_path.display());
 
         let new_path_clone = new_path.clone();
-        spawn_blocking(move || renameat(None, &path, None, &new_path_clone)).await??;
+        let path_clone = path.clone();
+        spawn_blocking(move || renameat(None, &path_clone, None, &new_path_clone)).await??;
 
         let stat = self.get_file_attr(&new_path).await?;
 
         trace!("insert ({}, {})", stat.ino, new_path.display());
+        inode_map.remove_path(stat.ino, &path);
         inode_map.insert_path(stat.ino, new_path);
 
         Ok(())
