@@ -7,6 +7,7 @@ use nix::sys::wait;
 use nix::unistd::Pid;
 
 use log::{info, trace, warn};
+use procfs::ProcError;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -78,26 +79,35 @@ impl PtraceManager {
         match counter_ref.get_mut(&pid) {
             Some(count) => {
                 *count -= 1;
-                info!("decrease counter to {}", *count);
+                trace!("decrease counter to {}", *count);
                 if *count < 1 {
                     counter_ref.remove(&pid);
 
                     info!("detach process: {}", pid);
-                    let process = procfs::process::Process::new(pid)?;
-                    for task in process.tasks()? {
-                        if let Ok(task) = task {
-                            info!("detach task: {}", task.tid);
-                            match ptrace::detach(Pid::from_raw(task.tid), None) {
-                                Ok(()) => {}
-                                Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
-                                    // ignore because the task could be newly created
+                    match procfs::process::Process::new(pid) {
+                        Ok(process) => {
+                            for task in process.tasks()? {
+                                if let Ok(task) = task {
+                                    info!("detach task: {}", task.tid);
+                                    match ptrace::detach(Pid::from_raw(task.tid), None) {
+                                        Ok(()) => {}
+                                        Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
+                                            // ignore because the task could be newly created
+                                        }
+                                        Err(err) => return Err(err.into()),
+                                    }
+                                    info!("detach task: {} successfully", task.tid);
                                 }
-                                Err(err) => return Err(err.into()),
                             }
-                            info!("detach task: {} successfully", task.tid);
+                            info!("detach process: {} successfully", pid);
+                        }
+                        Err(ProcError::NotFound(_)) => {
+                            info!("process {} not found", pid)
+                        }
+                        Err(err) => {
+                            return Err(err.into())
                         }
                     }
-                    info!("detach process: {} successfully", pid);
                 }
 
                 Ok(())
@@ -303,7 +313,7 @@ impl TracedProcess {
 
 impl Drop for TracedProcess {
     fn drop(&mut self) {
-        info!("dropping traced process: {}", self.pid);
+        trace!("dropping traced process: {}", self.pid);
 
         if let Err(err) = PTRACE_MANAGER.with(|pm| pm.detach(self.pid)) {
             info!(
