@@ -307,7 +307,9 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         let uid = req.uid();
         let gid = req.gid();
         spawn_reply(req.unique(), reply, async move {
-            async_impl.mknod(parent, name, mode, umask, rdev, uid, gid).await
+            async_impl
+                .mknod(parent, name, mode, umask, rdev, uid, gid)
+                .await
         });
     }
     fn mkdir(

@@ -67,7 +67,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     info!("canonicalizing path {}", path.display());
     let path = path.canonicalize()?;
 
-    let replacer =  if !option.mount_only {
+    let replacer = if !option.mount_only {
         let mut replacer = UnionReplacer::new();
         replacer.prepare(&path, &path)?;
 
@@ -91,7 +91,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
         drop(replacer);
         info!("replacer detached");
     }
-    
+
     info!("enable injection");
     mount_guard.enable_injection();
 
@@ -119,7 +119,6 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     } else {
         None
     };
-    
 
     info!("recovering mount");
     mount_guard.recover_mount()?;

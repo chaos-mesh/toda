@@ -15,7 +15,7 @@ use nix::mount::umount;
 
 use log::info;
 
-use retry::{retry, delay::Fixed, OperationResult};
+use retry::{delay::Fixed, retry, OperationResult};
 
 #[derive(Debug)]
 pub struct MountInjector {
@@ -46,9 +46,9 @@ impl MountInjectionGuard {
         retry(Fixed::from_millis(200).take(10), || {
             if let Err(err) = umount(mount_point.as_path()) {
                 info!("umount returns error: {:?}", err);
-                return OperationResult::Retry(err)
+                return OperationResult::Retry(err);
             } else {
-                return OperationResult::Ok(())
+                return OperationResult::Ok(());
             }
         })?;
 
