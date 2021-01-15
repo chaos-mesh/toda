@@ -12,14 +12,13 @@ use derive_more::{Deref, DerefMut, From};
 use fuser::*;
 use slab::Slab;
 
-use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr};
+use libc::{lgetxattr, llistxattr, lremovexattr, lsetxattr, UTIME_NOW, UTIME_OMIT};
 
 use nix::dir;
 use nix::errno::Errno;
 use nix::fcntl::{open, readlink, renameat, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
-use nix::sys::time::{TimeVal, TimeValLike};
 use nix::unistd::{
     fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
     LinkatFlags, Uid,
@@ -299,6 +298,28 @@ fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
     })
 }
 
+fn convert_time(t: Option<TimeOrNow>) -> libc::timespec {
+    match t {
+        Some(TimeOrNow::SpecificTime(t)) => {
+            let nano_unit = 1e9 as i64;
+
+            let t = t.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i64;
+            libc::timespec {
+                tv_sec: t / nano_unit,
+                tv_nsec: t % nano_unit,
+            }
+        }
+        Some(TimeOrNow::Now) => libc::timespec {
+            tv_sec: 0,
+            tv_nsec: UTIME_NOW,
+        },
+        None => libc::timespec {
+            tv_sec: 0,
+            tv_nsec: UTIME_OMIT,
+        },
+    }
+}
+
 impl HookFs {
     async fn get_file_attr(&self, path: &Path) -> Result<FileAttr> {
         let mut attr = async_stat(&path)
@@ -425,27 +446,9 @@ impl AsyncFileSystemImpl for HookFs {
             async_truncate(&path, size as i64).await?;
         }
 
-        if let (Some(TimeOrNow::SpecificTime(atime)), Some(TimeOrNow::SpecificTime(mtime))) =
-            (atime, mtime)
-        {
-            // TODO: handle error here
-            let atime = atime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64;
-            let mtime = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64;
-
-            let nano_unit = 1e9 as i64;
-            let atime =
-                TimeVal::seconds(atime / nano_unit) + TimeVal::nanoseconds(atime % nano_unit);
-            let mtime =
-                TimeVal::seconds(mtime / nano_unit) + TimeVal::nanoseconds(mtime % nano_unit);
-            // TODO: check whether one of them is Some
-            async_utimes(&path, atime, mtime).await?;
-        }
+        let times = [convert_time(atime), convert_time(mtime)];
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        async_utimensat(path, times).await?;
 
         self.getattr(ino).await
     }
@@ -1274,9 +1277,23 @@ async fn async_truncate(path: &Path, len: i64) -> Result<()> {
     Ok(())
 }
 
-async fn async_utimes(path: &Path, atime: TimeVal, mtime: TimeVal) -> Result<()> {
-    let path_clone = path.to_path_buf();
-    spawn_blocking(move || stat::utimes(&path_clone, &atime, &mtime)).await??;
+async fn async_utimensat(path: CString, times: [libc::timespec; 2]) -> Result<()> {
+    spawn_blocking(move || unsafe {
+        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let ret = libc::utimensat(
+            0,
+            path_ptr,
+            &times as *const [libc::timespec; 2] as *const libc::timespec,
+            libc::AT_SYMLINK_NOFOLLOW,
+        );
+
+        if ret != 0 {
+            Err(Error::last())
+        } else {
+            Ok(())
+        }
+    })
+    .await??;
     Ok(())
 }
 

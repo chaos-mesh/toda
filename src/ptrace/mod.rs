@@ -53,7 +53,7 @@ impl PtraceManager {
                             Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
                                 info!("task {} doesn't exist, maybe has stopped", task.tid)
                             }
-                            Err(err) => {return Err(err.into())}
+                            Err(err) => return Err(err.into()),
                             _ => {}
                         }
                         info!("attach task: {} successfully", task.tid);
@@ -97,9 +97,10 @@ impl PtraceManager {
                                     info!("detach task: {}", task.tid);
                                     match ptrace::detach(Pid::from_raw(task.tid), None) {
                                         Ok(()) => {}
-                                        Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
-                                            info!("task {} doesn't exist, maybe has stopped", task.tid)
-                                        }
+                                        Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => info!(
+                                            "task {} doesn't exist, maybe has stopped",
+                                            task.tid
+                                        ),
                                         Err(err) => return Err(err.into()),
                                     }
                                     info!("detach task: {} successfully", task.tid);
@@ -107,12 +108,8 @@ impl PtraceManager {
                             }
                             info!("detach process: {} successfully", pid);
                         }
-                        Err(ProcError::NotFound(_)) => {
-                            info!("process {} not found", pid)
-                        }
-                        Err(err) => {
-                            return Err(err.into())
-                        }
+                        Err(ProcError::NotFound(_)) => info!("process {} not found", pid),
+                        Err(err) => return Err(err.into()),
                     }
                 }
 
