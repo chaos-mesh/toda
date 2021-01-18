@@ -35,7 +35,7 @@ fn init(name: &str) -> (PathBuf, fuser::BackgroundSession) {
     let test_path: PathBuf = ["/tmp/test_mnt", name].iter().collect();
 
     INIT.call_once(|| {
-        flexi_logger::Logger::with_env().start().unwrap();
+        env_logger::init();
     });
 
     std::fs::remove_dir_all(&test_path_backend).ok();
