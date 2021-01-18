@@ -1,9 +1,12 @@
 use fuser::*;
 use log::{debug, error, trace};
+use std::time::Duration;
 
 use super::errors::Result;
 
 use std::fmt::Debug;
+
+const TTL: Duration = Duration::from_secs(0);
 
 #[derive(Debug)]
 pub enum Reply<'a> {
@@ -20,14 +23,12 @@ pub enum Reply<'a> {
 
 #[derive(Debug)]
 pub struct Entry {
-    pub time: std::time::Duration,
     pub stat: FileAttr,
     pub generation: u64,
 }
 impl Entry {
-    pub fn new(time: std::time::Duration, stat: FileAttr, generation: u64) -> Self {
+    pub fn new(stat: FileAttr, generation: u64) -> Self {
         Self {
-            time,
             stat,
             generation,
         }
@@ -113,7 +114,6 @@ impl Write {
 
 #[derive(Debug)]
 pub struct Create {
-    pub ttl: std::time::Duration,
     pub attr: FileAttr,
     pub generation: u64,
     pub fh: u64,
@@ -121,14 +121,12 @@ pub struct Create {
 }
 impl Create {
     pub fn new(
-        ttl: std::time::Duration,
         attr: FileAttr,
         generation: u64,
         fh: u64,
         flags: i32,
     ) -> Self {
         Self {
-            ttl,
             attr,
             generation,
             fh,
@@ -195,7 +193,7 @@ pub trait FsReply<T: Debug>: Sized {
 
 impl FsReply<Entry> for ReplyEntry {
     fn reply_ok(self, item: Entry) {
-        self.entry(&item.time, &item.stat, item.generation);
+        self.entry(&TTL, &item.stat, item.generation);
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);
@@ -259,7 +257,7 @@ impl FsReply<Write> for ReplyWrite {
 impl FsReply<Create> for ReplyCreate {
     fn reply_ok(self, item: Create) {
         self.created(
-            &item.ttl,
+            &TTL,
             &item.attr,
             item.generation,
             item.fh,

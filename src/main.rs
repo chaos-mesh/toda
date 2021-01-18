@@ -15,6 +15,7 @@
 #![feature(async_closure)]
 #![feature(vec_into_raw_parts)]
 #![feature(atomic_mut_ptr)]
+#![feature(drain_filter)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
@@ -40,6 +41,7 @@ use log::info;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
+use env_logger;
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -150,10 +152,7 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
-    flexi_logger::Logger::with_str(&option.verbose)
-        .format(flexi_logger::colored_detailed_format)
-        .start()
-        .unwrap();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&option.verbose)).init();
 
     let mount_injector = inject(option.clone())?;
 

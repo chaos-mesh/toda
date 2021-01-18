@@ -15,6 +15,7 @@
 #![feature(async_closure)]
 #![feature(vec_into_raw_parts)]
 #![feature(atomic_mut_ptr)]
+#![feature(drain_filter)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
