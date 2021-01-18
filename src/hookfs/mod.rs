@@ -32,7 +32,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use log::{debug, error, trace};
 
-use std::{collections::{HashMap, LinkedList}};
+use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
 use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
@@ -319,9 +319,7 @@ impl AsyncFileSystemImpl for HookFs {
         let stat = self.get_file_attr(&path).await?;
 
         trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         // TODO: support generation number
@@ -457,9 +455,7 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Entry::new(stat, 0);
@@ -495,9 +491,7 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Entry::new(stat, 0);
@@ -570,9 +564,7 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Entry::new(stat, 0);
@@ -657,9 +649,7 @@ impl AsyncFileSystemImpl for HookFs {
             new_path
         };
         let stat = self.get_file_attr(&new_path).await?;
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, new_path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Entry::new(stat, 0);
@@ -691,10 +681,11 @@ impl AsyncFileSystemImpl for HookFs {
 
         let fd = async_open(&path, filtered_flags, stat::Mode::S_IRWXU).await?;
 
-        let fh = self.opened_files.write().await.insert(File::new(
-            fd,
-            path.clone(),
-        )) as u64;
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(fd, path.clone())) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 
@@ -838,7 +829,7 @@ impl AsyncFileSystemImpl for HookFs {
         let offset = offset as usize;
 
         // TODO: optimize the implementation
-        let all_entries:Vec<_> = {
+        let all_entries: Vec<_> = {
             let mut opened_dirs = self.opened_dirs.write().await;
             let dir = match opened_dirs.get_mut(fh as usize) {
                 Ok(dir) => dir,
@@ -1150,18 +1141,12 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = self.get_file_attr(&path).await?;
 
-        let fh = self
-            .opened_files
-            .write()
-            .await
-            .insert(File::new(fd, &path));
+        let fh = self.opened_files.write().await.insert(File::new(fd, &path));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
-        let mut inode_map = self.inode_map
-            .write()
-            .await;
+        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Create::new(stat, 0, fh as u64, flags);
@@ -1211,14 +1196,15 @@ async fn async_read(fd: RawFd, count: usize, offset: i64) -> Result<(Vec<u8>, is
     spawn_blocking(move || unsafe {
         let mut buf = Vec::new();
         buf.resize(count, 0);
-        let ret = libc::pread(fd, buf.as_ptr() as *mut c_void, count ,offset);
+        let ret = libc::pread(fd, buf.as_ptr() as *mut c_void, count, offset);
         if ret == -1 {
             Err(Error::last())
         } else {
             buf.resize(ret as usize, 0);
             Ok((buf, ret))
         }
-    }).await?
+    })
+    .await?
 }
 
 async fn async_write(fd: RawFd, data: Vec<u8>, offset: i64) -> Result<isize> {
@@ -1229,7 +1215,8 @@ async fn async_write(fd: RawFd, data: Vec<u8>, offset: i64) -> Result<isize> {
         } else {
             Ok(ret)
         }
-    }).await?
+    })
+    .await?
 }
 
 async fn async_stat(path: &Path) -> Result<stat::FileStat> {

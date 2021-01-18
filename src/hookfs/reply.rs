@@ -28,10 +28,7 @@ pub struct Entry {
 }
 impl Entry {
     pub fn new(stat: FileAttr, generation: u64) -> Self {
-        Self {
-            stat,
-            generation,
-        }
+        Self { stat, generation }
     }
 }
 
@@ -120,12 +117,7 @@ pub struct Create {
     pub flags: i32,
 }
 impl Create {
-    pub fn new(
-        attr: FileAttr,
-        generation: u64,
-        fh: u64,
-        flags: i32,
-    ) -> Self {
+    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: i32) -> Self {
         Self {
             attr,
             generation,
