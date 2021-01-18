@@ -12,5 +12,11 @@
 
 * This program should be executed inside the target pid and mnt namespace
 
+## Known Issues
+
+* Cannot work with too long path (near 4096 bytes)
+
+* Cannot `stat` a fd after it has been deleted
+
 ## License
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fchaos-mesh%2Ftoda?ref=badge_large)
