@@ -10,4 +10,6 @@ RUN go build -o /go/bin/app
 FROM chaos-mesh/toda
 COPY --from=build-env /go/bin/app /
 COPY --from=build-env /go/bin/app /main-app
+
+ENV GOMAXPROCS 64
 CMD ["/app"]

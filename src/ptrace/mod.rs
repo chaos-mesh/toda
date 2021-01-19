@@ -1,15 +1,21 @@
+use Error::Internal;
 use anyhow::{anyhow, Result};
-use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::ptrace;
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::Signal;
 use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
+use nix::{
+    errno::Errno,
+    sys::mman::{MapFlags, ProtFlags},
+    Error::Sys,
+};
 
-use procfs::ProcError;
-use tracing::{info, trace, warn};
+use procfs::{ProcError, process::Task};
+use retry::{Error::{self, Operation}, OperationResult, delay::Fixed};
+use tracing::{error, info, instrument, trace, warn};
 
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashSet};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -30,7 +36,45 @@ pub fn trace(pid: i32) -> Result<TracedProcess> {
     PTRACE_MANAGER.with(|pm| pm.trace(pid))
 }
 
+fn thread_is_gone(state: char) -> bool {
+    // return true if the process is Zombie or Dead
+    state == 'Z' || state == 'x' || state == 'X'
+}
+
+#[instrument]
+fn attach_task(task: &Task) -> Result<()> {
+    let pid = Pid::from_raw(task.tid);
+    let process = procfs::process::Process::new(task.tid)?;
+
+    trace!("attach task: {}", task.tid);
+    match ptrace::attach(pid) {
+        Err(Sys(errno))
+            if errno == Errno::ESRCH
+                || (errno == Errno::EPERM && thread_is_gone(process.stat.state)) =>
+        {
+            info!("task {} doesn't exist, maybe has stopped", task.tid)
+        }
+        Err(err) => {
+            warn!("attach error: {:?}", err);
+            return Err(err.into())
+        },
+        _ => {}
+    }
+    info!("attach task: {} successfully", task.tid);
+
+    // TODO: check wait result
+    match wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL)) {
+        Ok(status) => {
+            info!("wait status: {:?}", status);
+        }
+        Err(err) => warn!("fail to wait for process({}): {:?}", pid, err),
+    };
+
+    Ok(())
+}
+
 impl PtraceManager {
+    #[instrument(skip(self))]
     pub fn trace(&self, pid: i32) -> Result<TracedProcess> {
         let raw_pid = pid;
         let pid = Pid::from_raw(pid);
@@ -39,47 +83,42 @@ impl PtraceManager {
         match counter_ref.get_mut(&raw_pid) {
             Some(count) => *count += 1,
             None => {
-                trace!("send SIGSTOP to process: {}", pid);
-                kill(pid, Signal::SIGSTOP)?;
                 trace!("stop {} successfully", pid);
 
-                let process = procfs::process::Process::new(raw_pid)?;
-                for task in process.tasks()? {
-                    if let Ok(task) = task {
-                        let pid = Pid::from_raw(task.tid);
+                let mut iterations = 2;
+                let mut traced_tasks = HashSet::<i32>::new();
 
-                        info!("attach task: {}", task.tid);
-                        match ptrace::attach(pid) {
-                            Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => {
-                                info!("task {} doesn't exist, maybe has stopped", task.tid)
+                while iterations > 0 {
+                    let mut new_threads_found = false;
+                    let process = procfs::process::Process::new(raw_pid)?;
+                    for task in process.tasks()? {
+                        if let Ok(task) = task {
+                            if traced_tasks.contains(&task.tid) {
+                                continue
                             }
-                            Err(err) => return Err(err.into()),
-                            _ => {}
+                        
+                            if let Ok(()) = attach_task(&task) {
+                                trace!("newly traced task: {}", task.tid);
+                                new_threads_found = true;
+                                traced_tasks.insert(task.tid);
+                            }
                         }
-                        info!("attach task: {} successfully", task.tid);
+                    }
 
-                        // TODO: check wait result
-                        match wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL)) {
-                            Ok(status) => {
-                                info!("wait status: {:?}", status);
-                            }
-                            Err(err) => warn!("fail to wait for process({}): {:?}", pid, err),
-                        }
+                    if !new_threads_found {
+                        iterations -= 1;
                     }
                 }
 
                 info!("trace process: {} successfully", pid);
                 counter_ref.insert(raw_pid, 1);
-
-                info!("send SIGCONT to process: {}", pid);
-                kill(pid, Signal::SIGCONT)?;
-                info!("continue {} successfully", pid);
             }
         }
 
         Ok(TracedProcess { pid: raw_pid })
     }
 
+    #[instrument(skip(self))]
     pub fn detach(&self, pid: i32) -> Result<()> {
         let mut counter_ref = self.counter.borrow_mut();
         match counter_ref.get_mut(&pid) {
@@ -90,27 +129,57 @@ impl PtraceManager {
                     counter_ref.remove(&pid);
 
                     info!("detach process: {}", pid);
-                    match procfs::process::Process::new(pid) {
-                        Ok(process) => {
-                            for task in process.tasks()? {
-                                if let Ok(task) = task {
-                                    info!("detach task: {}", task.tid);
-                                    match ptrace::detach(Pid::from_raw(task.tid), None) {
-                                        Ok(()) => {}
-                                        Err(nix::Error::Sys(nix::errno::Errno::ESRCH)) => info!(
-                                            "task {} doesn't exist, maybe has stopped",
-                                            task.tid
-                                        ),
-                                        Err(err) => return Err(err.into()),
-                                    }
-                                    info!("detach task: {} successfully", task.tid);
-                                }
+                    if let Err(err) = retry::retry::<_, _, _, anyhow::Error, _>(Fixed::from_millis(500).take(20), || {
+                        match procfs::process::Process::new(pid) {
+                            Err(ProcError::NotFound(_)) => {
+                                info!("process {} not found", pid);
+                                OperationResult::Ok(())
                             }
-                            info!("detach process: {} successfully", pid);
+                            Err(err) => {
+                                warn!("fail to detach task: {}, retry", pid);
+                                OperationResult::Retry(err.into())
+                            }
+                            Ok(process) => {
+                                match process.tasks() {
+                                    Err(err) => {
+                                        OperationResult::Retry(err.into())
+                                    }
+                                    Ok(tasks) => {
+                                        for task in tasks {
+                                            if let Ok(task) = task {
+                                                match ptrace::detach(Pid::from_raw(task.tid), None) {
+                                                    Ok(()) => {
+                                                        info!("successfully detached task: {}", task.tid);
+                                                    }
+                                                    Err(Sys(Errno::ESRCH)) => trace!(
+                                                        "task {} doesn't exist, maybe has stopped or not traced",
+                                                        task.tid
+                                                    ),
+                                                    Err(err) => {
+                                                        warn!("fail to detach: {:?}", err)
+                                                    },
+                                                }
+                                                trace!("detach task: {} successfully", task.tid);
+                                            }
+                                        }
+                                        info!("detach process: {} successfully", pid);
+                                        OperationResult::Ok(())
+                                    }
+                                }
+                                
+                            }
                         }
-                        Err(ProcError::NotFound(_)) => info!("process {} not found", pid),
-                        Err(err) => return Err(err.into()),
-                    }
+                    }) {
+                        warn!("fail to detach: {:?}", err);
+                        match err {
+                            Operation {error: e, total_delay:_, tries:_, } => {
+                                return Err(e)
+                            },
+                            Internal(err) => {
+                                error!("internal error: {:?}", err)
+                            }
+                        }
+                    };
                 }
 
                 Ok(())
@@ -133,6 +202,7 @@ impl Clone for TracedProcess {
 }
 
 impl TracedProcess {
+    #[instrument]
     fn protect(&self) -> Result<ThreadGuard> {
         let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
 
@@ -148,6 +218,7 @@ impl TracedProcess {
         Ok(guard)
     }
 
+    #[instrument(skip(f))]
     fn with_protect<R, F: Fn(&Self) -> Result<R>>(&self, f: F) -> Result<R> {
         let guard = self.protect()?;
 
@@ -158,6 +229,7 @@ impl TracedProcess {
         Ok(ret)
     }
 
+    #[instrument]
     fn syscall(&self, id: u64, args: &[u64]) -> Result<u64> {
         trace!("run syscall {} {:?}", id, args);
 
@@ -216,6 +288,7 @@ impl TracedProcess {
         })
     }
 
+    #[instrument]
     pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {
         let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
@@ -226,10 +299,12 @@ impl TracedProcess {
         )
     }
 
+    #[instrument]
     pub fn munmap(&self, addr: u64, len: u64) -> Result<u64> {
         self.syscall(11, &[addr, len])
     }
 
+    #[instrument(skip(f))]
     pub fn with_mmap<R, F: Fn(&Self, u64) -> Result<R>>(&self, len: u64, f: F) -> Result<R> {
         let addr = self.mmap(len, 0)?;
 
@@ -240,7 +315,8 @@ impl TracedProcess {
         Ok(ret)
     }
 
-    pub fn chdir<P: AsRef<Path>>(&self, filename: P) -> Result<()> {
+    #[instrument]
+    pub fn chdir<P: AsRef<Path> + std::fmt::Debug>(&self, filename: P) -> Result<()> {
         let filename = CString::new(filename.as_ref().as_os_str().as_bytes())?;
         let path = filename.as_bytes_with_nul();
 
@@ -252,6 +328,7 @@ impl TracedProcess {
         })
     }
 
+    #[instrument]
     pub fn write_mem(&self, addr: u64, content: &[u8]) -> Result<()> {
         let pid = Pid::from_raw(self.pid);
 
@@ -267,6 +344,7 @@ impl TracedProcess {
         Ok(())
     }
 
+    #[instrument(skip(codes))]
     pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {
         let pid = Pid::from_raw(self.pid);
 
@@ -320,7 +398,7 @@ impl Drop for TracedProcess {
 
         if let Err(err) = PTRACE_MANAGER.with(|pm| pm.detach(self.pid)) {
             info!(
-                "deteching process {} failed with error: {:?}",
+                "detaching process {} failed with error: {:?}",
                 self.pid, err
             )
         }

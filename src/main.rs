@@ -41,7 +41,7 @@ use anyhow::Result;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
-use tracing::info;
+use tracing::{info, instrument, trace};
 use tracing_subscriber::EnvFilter;
 
 use std::path::PathBuf;
@@ -60,8 +60,9 @@ struct Options {
     verbose: String,
 }
 
+#[instrument(skip(option))]
 fn inject(option: Options) -> Result<MountInjectionGuard> {
-    info!("parse injector configs");
+    trace!("parse injector configs");
     let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
     info!("inject with config {:?}", injector_config);
 
@@ -101,6 +102,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     Ok(mount_guard)
 }
 
+#[instrument(skip(option, mount_guard))]
 fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
@@ -153,6 +155,7 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
+    info!("start with option: {:?}", option);
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))

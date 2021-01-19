@@ -33,7 +33,7 @@ use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
 
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{RawFd};
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -718,11 +718,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("open with flags: {:?}", filtered_flags);
 
         let fd = async_open(&path, filtered_flags, stat::Mode::S_IRWXU).await?;
-        let fh = self
-            .opened_files
-            .write()
-            .await
-            .insert(File::new(fd, path)) as u64;
+        let fh = self.opened_files.write().await.insert(File::new(fd, path)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 

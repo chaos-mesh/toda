@@ -153,7 +153,7 @@ impl MountInjector {
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         before_mount_waiter.wait();
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_millis(200));
 
         Ok(MountInjectionGuard {
             handler: Some(handler),

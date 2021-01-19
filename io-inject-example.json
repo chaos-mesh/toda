@@ -1,8 +1,8 @@
 [
     {
         "type": "latency",
-        "path": "/mnt/a/b/**/*",
+        "path": "/var/run/test/**/*",
         "percent": 100,
-        "latency": "200ms"
+        "latency": "10ms"
     }
 ]
