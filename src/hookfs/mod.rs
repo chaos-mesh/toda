@@ -27,9 +27,6 @@ use nix::unistd::{
     LinkatFlags, Uid,
 };
 
-
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 use tracing::{debug, error, instrument, trace};
 
 use std::collections::{HashMap, LinkedList};
@@ -725,7 +722,7 @@ impl AsyncFileSystemImpl for HookFs {
             .opened_files
             .write()
             .await
-            .insert(File::new(fd, path.clone())) as u64;
+            .insert(File::new(fd, path)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 

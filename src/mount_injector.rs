@@ -46,9 +46,9 @@ impl MountInjectionGuard {
         retry(Fixed::from_millis(500).take(20), || {
             if let Err(err) = umount(mount_point.as_path()) {
                 info!("umount returns error: {:?}", err);
-                return OperationResult::Retry(err);
+                OperationResult::Retry(err)
             } else {
-                return OperationResult::Ok(());
+                OperationResult::Ok(())
             }
         })?;
 
