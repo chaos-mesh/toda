@@ -27,16 +27,16 @@ use nix::unistd::{
     LinkatFlags, Uid,
 };
 
-use tokio::fs;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use tracing::{debug, error, trace, instrument};
+use tracing::{debug, error, instrument, trace};
 
 use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
-use std::io::SeekFrom;
+
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1160,7 +1160,8 @@ async fn async_setxattr(path: CString, name: CString, data: Vec<u8>, flags: i32)
         } else {
             Ok(())
         }
-    }).await?
+    })
+    .await?
 }
 
 async fn async_getxattr(path: CString, name: CString, size: usize) -> Result<Vec<u8>> {

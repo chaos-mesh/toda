@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tracing::{trace, trace_span};
+use tracing::{trace_span};
 
 pub fn spawn_reply<F, R, V>(id: u64, reply: R, f: F)
 where

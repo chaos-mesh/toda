@@ -1,6 +1,6 @@
 use fuser::*;
-use tracing::{debug, error, trace};
 use std::time::Duration;
+use tracing::{debug, error, trace};
 
 use super::errors::Result;
 

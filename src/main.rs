@@ -37,15 +37,15 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
-use env_logger;
-use tracing::info;
+
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use std::{convert::TryFrom, os::unix::io::RawFd};
 use std::path::PathBuf;
+use std::{convert::TryFrom, os::unix::io::RawFd};
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -157,9 +157,7 @@ fn main() -> Result<()> {
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
         .unwrap();
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let mount_injector = inject(option.clone())?;
 

@@ -6,8 +6,8 @@ use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
 use nix::sys::wait;
 use nix::unistd::Pid;
 
-use tracing::{info, trace, warn};
 use procfs::ProcError;
+use tracing::{info, trace, warn};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
