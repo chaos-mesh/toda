@@ -63,39 +63,47 @@ macro_rules! inject {
 
 macro_rules! inject_with_ino {
     ($self:ident, $method:ident, $ino:ident) => {
-        let inode_map = $self.inode_map.read().await;
-        if let Ok(path) = inode_map.get_path($ino) {
-            trace!("getting attr from path {}", path.display());
-            inject!($self, $method, &path);
+        {
+            let inode_map = $self.inode_map.read().await;
+            if let Ok(path) = inode_map.get_path($ino) {
+                trace!("getting attr from path {}", path.display());
+                inject!($self, $method, &path);
+            }
         }
     };
 }
 
 macro_rules! inject_with_fh {
     ($self:ident, $method:ident, $fh:ident) => {
-        let opened_files = $self.opened_files.read().await;
-        if let Ok(file) = opened_files.get($fh as usize) {
-            inject!($self, $method, &file.original_path());
+        {
+            let opened_files = $self.opened_files.read().await;
+            if let Ok(file) = opened_files.get($fh as usize) {
+                inject!($self, $method, &file.original_path());
+            }
         }
     }
 }
 
 macro_rules! inject_with_dir_fh {
     ($self:ident, $method:ident, $fh:ident) => {
-        let opened_files = $self.opened_dirs.read().await;
-        if let Ok(dir) = opened_files.get($fh as usize) {
-            inject!($self, $method, &dir.original_path());
+        {
+            let opened_files = $self.opened_dirs.read().await;
+            if let Ok(dir) = opened_files.get($fh as usize) {
+                inject!($self, $method, &dir.original_path());
+            }
         }
     }
 }
 
 macro_rules! inject_with_parent_and_name {
     ($self:ident, $method:ident, $parent:ident, $name:expr) => {
-        let inode_map = $self.inode_map.read().await;
-        if let Ok(parent_path) = inode_map.get_path($parent) {
-            let old_path = parent_path.join($name);
-            trace!("get path: {}", old_path.display());
-            inject!($self, $method, old_path.as_path());
+        {
+            let inode_map = $self.inode_map.read().await;
+            if let Ok(parent_path) = inode_map.get_path($parent) {
+                let old_path = parent_path.join($name);
+                trace!("get path: {}", old_path.display());
+                inject!($self, $method, old_path.as_path());
+            }
         }
     }
 }
@@ -428,10 +436,15 @@ impl AsyncFileSystemImpl for HookFs {
         }
 
         let times = [convert_time(atime), convert_time(mtime)];
-        let path = CString::new(path.as_os_str().as_bytes())?;
-        async_utimensat(path, times).await?;
+        let cpath = CString::new(path.as_os_str().as_bytes())?;
+        async_utimensat(cpath, times).await?;
 
-        self.getattr(ino).await
+        let stat = self.get_file_attr(&path).await?;
+        trace!("return with {:?}", stat);
+        let mut reply = Attr::new(stat);
+        inject_reply!(self, GETATTR, path, reply, Attr);
+        
+        Ok(reply)
     }
 
     async fn readlink(&self, ino: u64) -> Result<Data> {
@@ -530,10 +543,11 @@ impl AsyncFileSystemImpl for HookFs {
             parent_path.join(name)
         };
 
+        let stat = self.get_file_attr(&path).await?;
+    
         trace!("unlinking {}", path.display());
         async_unlink(&path).await?;
 
-        let stat = self.get_file_attr(&path).await?;
         trace!("remove {:x} from inode_map", &stat.ino);
         inode_map.remove_path(stat.ino, &path);
         
@@ -550,12 +564,14 @@ impl AsyncFileSystemImpl for HookFs {
             parent_path.join(name)
         };
 
+        let stat = self.get_file_attr(&path).await?;
+        
         let cpath = CString::new(path.as_os_str().as_bytes())?;
         async_rmdir(cpath).await?;
-        
-        let stat = self.get_file_attr(&path).await?;
+
         trace!("remove {:x} from inode_map", &stat.ino);
         inode_map.remove_path(stat.ino, &path);
+        
 
         Ok(())
     }
@@ -1056,7 +1072,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create");
         inject_with_parent_and_name!(self, CREATE, parent, &name);
 
-        let inode_map = self.inode_map.write().await;
+        let mut inode_map = self.inode_map.write().await;
         let path = {
             let parent_path = inode_map.get_path(parent)?;
             parent_path.join(name)
@@ -1072,13 +1088,11 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-
         let fh = self.opened_files.write().await.insert(File::new(fd, &path));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
-        let mut inode_map = self.inode_map.write().await;
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
         let mut reply = Create::new(stat, 0, fh as u64, flags);
