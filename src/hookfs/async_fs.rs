@@ -142,7 +142,7 @@ pub trait AsyncFileSystemImpl: Send + Sync {
 
     async fn opendir(&self, ino: u64, flags: i32) -> Result<Open>;
 
-    async fn readdir(&self, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory);
+    async fn readdir(&self, ino: u64, fh: u64, offset: i64, reply: &mut ReplyDirectory) -> Result<()>;
 
     async fn releasedir(&self, ino: u64, fh: u64, flags: i32) -> Result<()>;
 
@@ -471,10 +471,13 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
             async_impl.opendir(ino, flags).await
         });
     }
-    fn readdir(&mut self, _req: &Request, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory) {
+    fn readdir(&mut self, _req: &Request, ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
         let async_impl = self.0.clone();
         spawn(async move {
-            async_impl.readdir(ino, fh, offset, reply).await;
+            match async_impl.readdir(ino, fh, offset, &mut reply).await {
+                Ok(_) => reply.ok(),
+                Err(err) => reply.error(err.into())
+            }
         });
     }
     fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: i32, reply: ReplyEmpty) {

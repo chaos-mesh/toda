@@ -45,12 +45,11 @@ impl Open {
 
 #[derive(Debug)]
 pub struct Attr {
-    pub time: std::time::Duration,
     pub attr: FileAttr,
 }
 impl Attr {
-    pub fn new(time: std::time::Duration, attr: FileAttr) -> Self {
-        Self { time, attr }
+    pub fn new(attr: FileAttr) -> Self {
+        Self { attr }
     }
 }
 
@@ -203,7 +202,7 @@ impl FsReply<Open> for ReplyOpen {
 
 impl FsReply<Attr> for ReplyAttr {
     fn reply_ok(self, item: Attr) {
-        self.attr(&item.time, &item.attr);
+        self.attr(&TTL, &item.attr);
     }
     fn reply_err(self, err: libc::c_int) {
         self.error(err);
