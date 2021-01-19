@@ -1,5 +1,5 @@
 use fuser::*;
-use log::{debug, error, trace};
+use tracing::{debug, error, trace};
 use std::time::Duration;
 
 use super::errors::Result;
@@ -163,14 +163,14 @@ pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
     fn reply_err(self, err: libc::c_int);
 
-    fn reply(self, id: u64, result: Result<T>) {
+    fn reply(self, result: Result<T>) {
         match result {
             Ok(item) => {
-                trace!("ok. reply for request({})", id);
+                trace!("ok");
                 self.reply_ok(item)
             }
             Err(err) => {
-                debug!("err. reply with {} for request ({})", err, id);
+                debug!("err. reply with {}", err);
 
                 let err = err.into();
                 if err == -1 {

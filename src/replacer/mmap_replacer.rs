@@ -8,7 +8,7 @@ use std::io::{Cursor, Read, Write};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
-use log::{error, info, trace};
+use tracing::{error, info, trace};
 
 use procfs::process::MMapPath;
 

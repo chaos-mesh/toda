@@ -38,12 +38,13 @@ use utils::encode_path;
 
 use anyhow::Result;
 use env_logger;
-use log::info;
+use tracing::info;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
+use tracing_subscriber::EnvFilter;
 
-use std::os::unix::io::RawFd;
+use std::{convert::TryFrom, os::unix::io::RawFd};
 use std::path::PathBuf;
 
 #[derive(StructOpt, Debug, Clone)]
@@ -152,7 +153,12 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&option.verbose))
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_from(&option.verbose))
+        .or_else(|_| EnvFilter::try_new("trace"))
+        .unwrap();
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
         .init();
 
     let mount_injector = inject(option.clone())?;

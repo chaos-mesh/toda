@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use fuser::*;
+use tracing_futures::Instrument;
 
 use super::errors::Result;
 use super::reply::*;
@@ -13,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use log::trace;
+use tracing::{trace, trace_span};
 
 pub fn spawn_reply<F, R, V>(id: u64, reply: R, f: F)
 where
@@ -22,9 +23,8 @@ where
     V: Debug,
 {
     spawn(async move {
-        trace!("reply to request({})", id);
-        let result = f.await;
-        reply.reply(id, result);
+        let result = f.instrument(trace_span!("request", id)).await;
+        reply.reply(result);
     });
 }
 
@@ -142,7 +142,13 @@ pub trait AsyncFileSystemImpl: Send + Sync {
 
     async fn opendir(&self, ino: u64, flags: i32) -> Result<Open>;
 
-    async fn readdir(&self, ino: u64, fh: u64, offset: i64, reply: &mut ReplyDirectory) -> Result<()>;
+    async fn readdir(
+        &self,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        reply: &mut ReplyDirectory,
+    ) -> Result<()>;
 
     async fn releasedir(&self, ino: u64, fh: u64, flags: i32) -> Result<()>;
 
@@ -471,12 +477,19 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
             async_impl.opendir(ino, flags).await
         });
     }
-    fn readdir(&mut self, _req: &Request, ino: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
         let async_impl = self.0.clone();
         spawn(async move {
             match async_impl.readdir(ino, fh, offset, &mut reply).await {
                 Ok(_) => reply.ok(),
-                Err(err) => reply.error(err.into())
+                Err(err) => reply.error(err.into()),
             }
         });
     }

@@ -6,7 +6,7 @@ use crate::hookfs::Result;
 
 use async_trait::async_trait;
 use fuser::{FileAttr, FileType};
-use log::{debug, trace};
+use tracing::{debug, trace};
 
 use std::path::Path;
 

@@ -5,7 +5,7 @@ use super::injector_config::FaultsConfig;
 use crate::hookfs::{Error, Result};
 
 use async_trait::async_trait;
-use log::{debug, trace};
+use tracing::{debug, trace};
 use nix::errno::Errno;
 use rand::Rng;
 

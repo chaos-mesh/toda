@@ -8,7 +8,7 @@ use crate::hookfs::{Reply, Result};
 
 use async_trait::async_trait;
 use fuser::FileAttr;
-use log::trace;
+use tracing::trace;
 
 use std::path::Path;
 

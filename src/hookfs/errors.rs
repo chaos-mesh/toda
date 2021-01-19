@@ -2,7 +2,7 @@ use nix::errno::Errno;
 use nix::Error;
 use thiserror::Error;
 
-use log::error;
+use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum HookFsError {

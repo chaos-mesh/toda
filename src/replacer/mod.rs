@@ -9,7 +9,7 @@ mod fd_replacer;
 mod mmap_replacer;
 mod utils;
 
-use log::error;
+use tracing::error;
 
 pub trait Replacer {
     fn run(&mut self) -> Result<()>;

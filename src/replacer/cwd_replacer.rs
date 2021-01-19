@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use log::{error, info, trace};
+use tracing::{error, info, trace};
 
 #[derive(Debug)]
 pub struct CwdReplacer {

@@ -8,7 +8,7 @@ use super::injector_config::LatencyConfig;
 use super::Injector;
 use crate::hookfs::Result;
 
-use log::{debug, trace};
+use tracing::{debug, trace};
 use tokio::time::delay_for;
 
 #[derive(Debug)]

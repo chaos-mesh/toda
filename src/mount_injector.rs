@@ -13,7 +13,7 @@ use anyhow::{anyhow, Result};
 
 use nix::mount::umount;
 
-use log::info;
+use tracing::info;
 
 use retry::{delay::Fixed, retry, OperationResult};
 
