@@ -5,13 +5,13 @@
         "methods":["READ","WRITE"],
         "mistakes":[
             {
-                "class":"zero",
+                "filling":"zero",
                 "percent":100,
                 "maxOccurrences":1,
                 "maxLength":10
             },
             {
-                "class": "random",
+                "filling": "random",
                 "percent": 100,
                 "maxOccurrences": 1,
                 "maxLength": 10

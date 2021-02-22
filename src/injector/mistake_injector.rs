@@ -78,8 +78,8 @@ impl MistakeInjector {
                     1 => 1,
                     l => rng.gen_range(1, l),
                 };
-                debug!("Setting index [{},{}) to {:?}",pos,pos+length,mistake.class);
-                match mistake.class {
+                debug!("Setting index [{},{}) to {:?}",pos,pos+length,mistake.filling);
+                match mistake.filling {
                     MistakeType::Zero => {
                         for i in pos..pos + length {
                             data[i] = 0;

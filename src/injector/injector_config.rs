@@ -94,7 +94,7 @@ pub enum MistakeType {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MistakeConfig {
-    pub class: MistakeType,
+    pub filling: MistakeType,
     pub max_length: usize,
     pub max_occurrences: usize,
     pub percent: usize
