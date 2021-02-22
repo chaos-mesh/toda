@@ -29,9 +29,8 @@ use nix::unistd::{
 
 use tracing::{debug, error, instrument, trace};
 
-use std::collections::{HashMap, LinkedList};
+use std::{collections::{HashMap, LinkedList}};
 use std::ffi::{CString, OsStr, OsString};
-
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
@@ -79,6 +78,22 @@ macro_rules! inject_with_fh {
             inject!($self, $method, &path);
         }
     }};
+}
+
+macro_rules! inject_write_data {
+    ($self:ident, $fh:ident, $data:ident) => {
+        {
+            let opened_files = $self.opened_files.read().await;
+            if let Ok(file) = opened_files.get($fh as usize) {
+                let path = file.original_path().to_owned();
+                trace!("Write data before inject {:?}", $data);
+                $self
+                    .injector
+                    .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
+                trace!("Write data after inject {:?}", $data);
+            }
+        }
+    };
 }
 
 macro_rules! inject_with_dir_fh {
@@ -756,14 +771,14 @@ impl AsyncFileSystemImpl for HookFs {
         _ino: u64,
         fh: u64,
         offset: i64,
-        data: Vec<u8>,
+        mut data: Vec<u8>,
         _write_flags: u32,
         _flags: i32,
         _lock_owner: Option<u64>,
     ) -> Result<Write> {
         trace!("write");
         inject_with_fh!(self, WRITE, fh);
-
+        inject_write_data!(self, fh, data);
         let opened_files = self.opened_files.read().await;
         let file = opened_files.get(fh as usize)?;
 

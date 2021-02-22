@@ -3,6 +3,7 @@ mod fault_injector;
 mod filter;
 mod injector_config;
 mod latency_injector;
+mod mistake_injector;
 mod multi_injector;
 
 pub use filter::Method;
@@ -13,7 +14,7 @@ use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
 use fuser::FileAttr;
 
-use std::path::Path;
+use std::{path::Path};
 
 #[async_trait]
 pub trait Injector: Send + Sync + std::fmt::Debug {
@@ -24,6 +25,13 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
         _method: &filter::Method,
         _path: &Path,
         _reply: &mut Reply,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn inject_write_data(
+        &self,
+        _path: &Path,
+        _data: &mut Vec<u8>,
     ) -> Result<()> {
         Ok(())
     }

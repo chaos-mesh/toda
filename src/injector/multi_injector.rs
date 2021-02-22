@@ -3,6 +3,7 @@ use super::fault_injector::FaultInjector;
 use super::filter;
 use super::injector_config::InjectorConfig;
 use super::latency_injector::LatencyInjector;
+use super::mistake_injector::MistakeInjector;
 use super::Injector;
 use crate::hookfs::{Reply, Result};
 
@@ -32,6 +33,9 @@ impl MultiInjector {
                 }
                 InjectorConfig::AttrOverride(attr_override) => {
                     (box AttrOverrideInjector::build(attr_override)?) as Box<dyn Injector>
+                }
+                InjectorConfig::Mistake(mistakes) => {
+                    (box MistakeInjector::build(mistakes)?) as Box<dyn Injector>
                 }
             };
             injectors.push(injector)
@@ -63,5 +67,16 @@ impl Injector for MultiInjector {
         for injector in self.injectors.iter() {
             injector.inject_attr(attr, path)
         }
+    }
+
+    fn inject_write_data(
+        &self,
+        path: &Path,
+        data: &mut Vec<u8>,
+    ) -> Result<()> {
+        for injector in self.injectors.iter() {
+            injector.inject_write_data(path, data)?;
+        }
+        Ok(())
     }
 }
