@@ -9,6 +9,7 @@ pub enum InjectorConfig {
     Latency(LatencyConfig),
     Fault(FaultsConfig),
     AttrOverride(AttrOverrideConfig),
+    Mistake(MistakesConfig),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -81,4 +82,28 @@ pub enum FileType {
 pub struct Timespec {
     pub sec: i64,
     pub nsec: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum MistakeType {
+    Zero,
+    Random
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MistakeConfig {
+    pub class: MistakeType,
+    pub max_length: usize,
+    pub max_occurrences: usize,
+    pub percent: usize
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MistakesConfig {
+    pub mistakes: Vec<MistakeConfig>,
+    #[serde(flatten)]
+    pub filter: FilterConfig,
 }
