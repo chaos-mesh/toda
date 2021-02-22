@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rand::Rng;
 
-use std::{cmp::min, path::Path};
+use std::{cmp::{max, min}, path::Path};
 
 use super::filter;
 use super::injector_config::MistakeConfig;
@@ -65,18 +65,13 @@ impl MistakeInjector {
             }
             let occurrence = match mistake.max_occurrences {
                 0 => 0,
-                1 => 1,
-                mo => rng.gen_range(1, mo),
+                mo => rng.gen_range(1, mo + 1),
             };
             for _ in 0..occurrence {
-                let pos = match data_length {
-                    0 => 0,
-                    l => rng.gen_range(0, l),
-                };
+                let pos = rng.gen_range(0, max(data_length,1));
                 let length = match min(mistake.max_length, data_length-pos) {
                     0 => 0,
-                    1 => 1,
-                    l => rng.gen_range(1, l),
+                    l => rng.gen_range(1, l + 1),
                 };
                 debug!("Setting index [{},{}) to {:?}",pos,pos+length,mistake.filling);
                 match mistake.filling {
