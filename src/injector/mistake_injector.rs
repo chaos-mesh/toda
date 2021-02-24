@@ -63,7 +63,7 @@ impl MistakeInjector {
         let data_length = data.len();
         let mistake = &self.mistake;
         if rng.gen_range(0, 100) >= mistake.percent {
-            Ok(())
+            return Ok(());
         }
         let occurrence = match mistake.max_occurrences {
             0 => 0,
