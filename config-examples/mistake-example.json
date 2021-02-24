@@ -3,20 +3,13 @@
         "type": "mistake",
         "path": "/tmp/test/test.txt",
         "methods":["READ","WRITE"],
-        "mistakes":[
+        "mistake":
             {
                 "filling":"zero",
                 "percent":100,
                 "maxOccurrences":1,
                 "maxLength":10
             },
-            {
-                "filling": "random",
-                "percent": 100,
-                "maxOccurrences": 1,
-                "maxLength": 10
-            }
-        ],
         "percent":100
     }
 ]

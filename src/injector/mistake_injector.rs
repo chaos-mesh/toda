@@ -15,7 +15,7 @@ use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub struct MistakeInjector {
-    mistakes: Vec<MistakeConfig>,
+    mistake: MistakeConfig,
     filter: filter::Filter,
 }
 
@@ -38,7 +38,6 @@ impl Injector for MistakeInjector {
     }
 
     fn inject_write_data(&self, path: &Path, data: &mut Vec<u8>) -> Result<()> {
-        debug!("MI:Injecting write data???");
         if self.filter.filter(&super::Method::WRITE, path) {
             debug!("MI:Injecting write data");
             self.handle(data);
@@ -51,7 +50,7 @@ impl MistakeInjector {
     pub fn build(conf: MistakesConfig) -> anyhow::Result<Self> {
         trace!("build mistake injector");
         Ok(Self {
-            mistakes: conf.mistakes,
+            mistake: conf.mistake,
             filter: filter::Filter::build(conf.filter)?,
         })
     }
@@ -59,7 +58,7 @@ impl MistakeInjector {
         trace!("sabotage data");
         let mut rng = rand::thread_rng();
         let data_length = data.len();
-        for mistake in self.mistakes.iter() {
+        let mistake = &self.mistake
             if rng.gen_range(0, 100) >= mistake.percent {
                 continue;
             }
