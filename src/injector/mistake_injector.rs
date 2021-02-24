@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use rand::Rng;
 
-use std::{cmp::{max, min}, path::Path};
+use std::{
+    cmp::{max, min},
+    path::Path,
+};
 
 use super::filter;
 use super::injector_config::MistakeConfig;
@@ -58,29 +61,33 @@ impl MistakeInjector {
         trace!("sabotage data");
         let mut rng = rand::thread_rng();
         let data_length = data.len();
-        let mistake = &self.mistake
-            if rng.gen_range(0, 100) >= mistake.percent {
-                continue;
-            }
-            let occurrence = match mistake.max_occurrences {
+        let mistake = &self.mistake;
+        if rng.gen_range(0, 100) >= mistake.percent {
+            continue;
+        }
+        let occurrence = match mistake.max_occurrences {
+            0 => 0,
+            mo => rng.gen_range(1, mo + 1),
+        };
+        for _ in 0..occurrence {
+            let pos = rng.gen_range(0, max(data_length, 1));
+            let length = match min(mistake.max_length, data_length - pos) {
                 0 => 0,
-                mo => rng.gen_range(1, mo + 1),
+                l => rng.gen_range(1, l + 1),
             };
-            for _ in 0..occurrence {
-                let pos = rng.gen_range(0, max(data_length,1));
-                let length = match min(mistake.max_length, data_length-pos) {
-                    0 => 0,
-                    l => rng.gen_range(1, l + 1),
-                };
-                debug!("Setting index [{},{}) to {:?}",pos,pos+length,mistake.filling);
-                match mistake.filling {
-                    MistakeType::Zero => {
-                        for i in pos..pos + length {
-                            data[i] = 0;
-                        }
+            debug!(
+                "Setting index [{},{}) to {:?}",
+                pos,
+                pos + length,
+                mistake.filling
+            );
+            match mistake.filling {
+                MistakeType::Zero => {
+                    for i in pos..pos + length {
+                        data[i] = 0;
                     }
-                    MistakeType::Random => rng.fill(&mut data[pos..pos + length]),
                 }
+                MistakeType::Random => rng.fill(&mut data[pos..pos + length]),
             }
         }
     }
