@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use rand::Rng;
 
-use std::{cmp::{max, min}, path::Path};
+use std::{
+    cmp::{max, min},
+    path::Path,
+};
 
 use super::filter;
 use super::injector_config::MistakeConfig;
@@ -15,7 +18,7 @@ use tracing::{debug, trace};
 
 #[derive(Debug)]
 pub struct MistakeInjector {
-    mistakes: Vec<MistakeConfig>,
+    mistake: MistakeConfig,
     filter: filter::Filter,
 }
 
@@ -38,10 +41,9 @@ impl Injector for MistakeInjector {
     }
 
     fn inject_write_data(&self, path: &Path, data: &mut Vec<u8>) -> Result<()> {
-        debug!("MI:Injecting write data???");
         if self.filter.filter(&super::Method::WRITE, path) {
             debug!("MI:Injecting write data");
-            self.handle(data);
+            self.handle(data)?;
         }
         Ok(())
     }
@@ -51,38 +53,43 @@ impl MistakeInjector {
     pub fn build(conf: MistakesConfig) -> anyhow::Result<Self> {
         trace!("build mistake injector");
         Ok(Self {
-            mistakes: conf.mistakes,
+            mistake: conf.mistake,
             filter: filter::Filter::build(conf.filter)?,
         })
     }
-    pub fn handle(&self, data: &mut Vec<u8>) {
+    pub fn handle(&self, data: &mut Vec<u8>) -> Result<()> {
         trace!("sabotage data");
         let mut rng = rand::thread_rng();
         let data_length = data.len();
-        for mistake in self.mistakes.iter() {
-            if rng.gen_range(0, 100) >= mistake.percent {
-                continue;
-            }
-            let occurrence = match mistake.max_occurrences {
+        let mistake = &self.mistake;
+        if rng.gen_range(0, 100) >= mistake.percent {
+            return Ok(());
+        }
+        let occurrence = match mistake.max_occurrences {
+            0 => 0,
+            mo => rng.gen_range(1, mo + 1),
+        };
+        for _ in 0..occurrence {
+            let pos = rng.gen_range(0, max(data_length, 1));
+            let length = match min(mistake.max_length, data_length - pos) {
                 0 => 0,
-                mo => rng.gen_range(1, mo + 1),
+                l => rng.gen_range(1, l + 1),
             };
-            for _ in 0..occurrence {
-                let pos = rng.gen_range(0, max(data_length,1));
-                let length = match min(mistake.max_length, data_length-pos) {
-                    0 => 0,
-                    l => rng.gen_range(1, l + 1),
-                };
-                debug!("Setting index [{},{}) to {:?}",pos,pos+length,mistake.filling);
-                match mistake.filling {
-                    MistakeType::Zero => {
-                        for i in pos..pos + length {
-                            data[i] = 0;
-                        }
+            debug!(
+                "Setting index [{},{}) to {:?}",
+                pos,
+                pos + length,
+                mistake.filling
+            );
+            match mistake.filling {
+                MistakeType::Zero => {
+                    for i in pos..pos + length {
+                        data[i] = 0;
                     }
-                    MistakeType::Random => rng.fill(&mut data[pos..pos + length]),
                 }
+                MistakeType::Random => rng.fill(&mut data[pos..pos + length]),
             }
         }
+        Ok(())
     }
 }
