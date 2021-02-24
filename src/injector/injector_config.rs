@@ -97,7 +97,6 @@ pub struct MistakeConfig {
     pub filling: MistakeType,
     pub max_length: usize,
     pub max_occurrences: usize,
-    pub percent: usize
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

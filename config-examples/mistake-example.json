@@ -6,7 +6,6 @@
         "mistake":
             {
                 "filling":"zero",
-                "percent":100,
                 "maxOccurrences":1,
                 "maxLength":10
             },
