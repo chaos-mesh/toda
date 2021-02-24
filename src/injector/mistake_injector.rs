@@ -43,7 +43,7 @@ impl Injector for MistakeInjector {
     fn inject_write_data(&self, path: &Path, data: &mut Vec<u8>) -> Result<()> {
         if self.filter.filter(&super::Method::WRITE, path) {
             debug!("MI:Injecting write data");
-            self.handle(data);
+            self.handle(data)?;
         }
         Ok(())
     }
@@ -57,13 +57,13 @@ impl MistakeInjector {
             filter: filter::Filter::build(conf.filter)?,
         })
     }
-    pub fn handle(&self, data: &mut Vec<u8>) {
+    pub fn handle(&self, data: &mut Vec<u8>) -> Result<()> {
         trace!("sabotage data");
         let mut rng = rand::thread_rng();
         let data_length = data.len();
         let mistake = &self.mistake;
         if rng.gen_range(0, 100) >= mistake.percent {
-            continue;
+            Ok(())
         }
         let occurrence = match mistake.max_occurrences {
             0 => 0,
@@ -90,5 +90,6 @@ impl MistakeInjector {
                 MistakeType::Random => rng.fill(&mut data[pos..pos + length]),
             }
         }
+        Ok(())
     }
 }

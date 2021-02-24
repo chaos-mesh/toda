@@ -103,7 +103,7 @@ pub struct MistakeConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MistakesConfig {
-    pub mistakes: Vec<MistakeConfig>,
+    pub mistake: MistakeConfig,
     #[serde(flatten)]
     pub filter: FilterConfig,
 }
