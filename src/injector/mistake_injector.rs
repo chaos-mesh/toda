@@ -62,9 +62,6 @@ impl MistakeInjector {
         let mut rng = rand::thread_rng();
         let data_length = data.len();
         let mistake = &self.mistake;
-        if rng.gen_range(0, 100) >= mistake.percent {
-            return Ok(());
-        }
         let occurrence = match mistake.max_occurrences {
             0 => 0,
             mo => rng.gen_range(1, mo + 1),
