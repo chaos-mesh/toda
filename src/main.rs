@@ -165,6 +165,8 @@ fn main() -> Result<()> {
     let mount_injector = inject(option.clone())?;
 
     info!("waiting for signal to exit");
+    let rpc_heartbeat = "{\"method\": \"ServerHandler.Ping\", \"params\": [{}],\"id\": null}\n";
+    eprintln!("{}", rpc_heartbeat);
     let mut buf = vec![0u8; 6];
     read(reader, buf.as_mut_slice())?;
     info!("start to recover and exit");
