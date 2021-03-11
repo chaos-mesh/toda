@@ -30,10 +30,12 @@ mod ptrace;
 mod replacer;
 mod stop;
 mod utils;
+mod jsonrpc;
 
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
 use replacer::{Replacer, UnionReplacer};
+use tokio::runtime::Runtime;
 use utils::encode_path;
 
 use anyhow::Result;
@@ -44,8 +46,9 @@ use structopt::StructOpt;
 use tracing::{info, instrument, trace};
 use tracing_subscriber::EnvFilter;
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf, thread};
 use std::{convert::TryFrom, os::unix::io::RawFd};
+use jsonrpc::start_server;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -145,6 +148,12 @@ extern "C" fn signal_handler(_: libc::c_int) {
     }
 }
 
+fn wait_for_signal(chan: RawFd) -> Result<()> {
+    let mut buf = vec![0u8; 6];
+    read(chan, buf.as_mut_slice())?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let (reader, writer) = pipe()?;
     unsafe {
@@ -160,15 +169,18 @@ fn main() -> Result<()> {
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
         .unwrap();
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    tracing_subscriber::fmt().with_writer(io::stderr).with_env_filter(env_filter).init();
 
     let mount_injector = inject(option.clone())?;
 
     info!("waiting for signal to exit");
-    let rpc_heartbeat = "{\"method\": \"ServerHandler.Ping\", \"params\": [{}],\"id\": null}\n";
-    eprintln!("{}", rpc_heartbeat);
-    let mut buf = vec![0u8; 6];
-    read(reader, buf.as_mut_slice())?;
+    
+    thread::spawn(||{
+        Runtime::new()
+        .expect("Failed to create Tokio runtime")
+        .block_on(start_server());
+    });
+    wait_for_signal(reader)?;
     info!("start to recover and exit");
 
     resume(option, mount_injector)?;
