@@ -8,9 +8,9 @@ pub async fn start_server() {
 }
 
 pub fn new_server() -> ServerBuilder {
-	let mut io = IoHandler::default();
+    let mut io = IoHandler::default();
     handle_ping(&mut io);
-	return ServerBuilder::new(io)
+    return ServerBuilder::new(io)
 }
 
 fn handle_ping(handler:&mut IoHandler) {
