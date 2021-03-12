@@ -22,7 +22,6 @@ pub fn new_handler() -> IoHandler {
 
 #[rpc]
 pub trait Rpc {
-	/// Adds two numbers and returns a result
 	#[rpc(name = "ping")]
 	fn ping(&self) -> Result<String>;
 }
