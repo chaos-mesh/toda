@@ -34,7 +34,7 @@ impl Injector for MistakeInjector {
             debug!("MI:Injecting reply");
             if let Reply::Data(data) = reply {
                 let data = &mut data.data;
-                self.handle(data);
+                self.handle(data)?;
             }
         }
         Ok(())

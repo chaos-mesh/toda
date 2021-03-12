@@ -24,7 +24,7 @@ use nix::sys::stat;
 use nix::sys::statfs;
 use nix::unistd::{
     fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
-    LinkatFlags, Uid,
+    LinkatFlags, Uid, close,
 };
 
 use tracing::{debug, error, instrument, trace};
@@ -765,7 +765,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self,data))]
     async fn write(
         &self,
         _ino: u64,
@@ -815,6 +815,9 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("release");
 
         let mut opened_files = self.opened_files.write().await;
+        if let Ok(file) =  opened_files.get(fh as usize) {
+            async_close(file.fd).await?;
+        }
         opened_files.remove(fh as usize);
         Ok(())
     }
@@ -1329,4 +1332,8 @@ async fn async_open(path: &Path, filtered_flags: OFlag, mode: stat::Mode) -> Res
     let path_clone = path.to_path_buf();
     let fd = spawn_blocking(move || open(&path_clone, filtered_flags, mode)).await??;
     Ok(fd)
+}
+
+async fn async_close(fd: RawFd) -> Result<()> {
+    Ok(spawn_blocking(move || close(fd)).await??)
 }
