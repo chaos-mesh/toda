@@ -1,5 +1,6 @@
 use jsonrpc_stdio_server::{ServerBuilder, jsonrpc_core::*};
-use tracing::{info, trace};
+use jsonrpc_derive::rpc;
+use tracing::info;
 
 pub async fn start_server() {
     info!("Starting jsonrpc server");
@@ -9,17 +10,26 @@ pub async fn start_server() {
 }
 
 pub fn new_server() -> ServerBuilder {
-    let mut io = IoHandler::default();
-    handle_ping(&mut io);
-    let request = r#"{"jsonrpc": "2.0", "method": "ping", "params": {}, "id": 1}"#;
-	let response = r#"{"jsonrpc":"2.0","result":"pong","id":1}"#;
-    assert_eq!(io.handle_request_sync(request), Some(response.to_string()));
+    let io = new_handler();
     return ServerBuilder::new(io)
 }
 
-fn handle_ping(handler:&mut IoHandler) {
-    handler.add_sync_method("ping", |_params|{
-        trace!("Receiving ping");
-        Ok(Value::String("pong".to_owned()))
-    });
+pub fn new_handler() -> IoHandler {
+    let mut io = IoHandler::new();
+    io.extend_with(RpcImpl.to_delegate());
+    io
+}
+
+#[rpc]
+pub trait Rpc {
+	/// Adds two numbers and returns a result
+	#[rpc(name = "ping")]
+	fn ping(&self) -> Result<String>;
+}
+
+pub struct RpcImpl;
+impl Rpc for RpcImpl {
+	fn ping(&self) -> Result<String> {
+		Ok("pong".to_string())
+	}
 }

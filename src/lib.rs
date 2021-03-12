@@ -22,3 +22,5 @@
 pub mod injector;
 
 pub mod hookfs;
+
+pub mod jsonrpc;
