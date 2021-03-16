@@ -24,13 +24,13 @@ extern crate derive_more;
 mod fuse_device;
 mod hookfs;
 mod injector;
+mod jsonrpc;
 mod mount;
 mod mount_injector;
 mod ptrace;
 mod replacer;
 mod stop;
 mod utils;
-mod jsonrpc;
 
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
@@ -46,9 +46,9 @@ use structopt::StructOpt;
 use tracing::{info, instrument, trace};
 use tracing_subscriber::EnvFilter;
 
+use jsonrpc::{Comm, start_server};
+use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
 use std::{io, path::PathBuf, thread};
-use std::{convert::TryFrom, os::unix::io::RawFd};
-use jsonrpc::start_server;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -169,21 +169,37 @@ fn main() -> Result<()> {
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
         .unwrap();
-    tracing_subscriber::fmt().with_writer(io::stderr).with_env_filter(env_filter).init();
+    tracing_subscriber::fmt()
+        .with_writer(io::stderr)
+        .with_env_filter(env_filter)
+        .init();
 
-    let mount_injector = inject(option.clone())?;
+    let mount_injector = inject(option.clone());
 
-    info!("waiting for signal to exit");
+    let status = match &mount_injector{
+                Ok(_) => Ok(()),
+                Err(e) => Err(anyhow::Error::msg(e.to_string())),
+            };
     
-    thread::spawn(||{
+    let (tx, rx)= mpsc::channel();
+    let server = thread::spawn(move || {
         Runtime::new()
-        .expect("Failed to create Tokio runtime")
-        .block_on(start_server());
+            .expect("Failed to create Tokio runtime")
+            .block_on(start_server(status, tx));
     });
-    wait_for_signal(reader)?;
-    info!("start to recover and exit");
 
-    resume(option, mount_injector)?;
-
-    Ok(())
+    match mount_injector {
+        Ok(v) => {
+            info!("waiting for signal to exit");
+            wait_for_signal(reader)?;
+            info!("start to recover and exit");
+            resume(option, v)?;
+            Ok(())
+        },
+        Err(e) => {
+            while(rx.recv().unwrap() != Comm::Shutdown){};
+            server.join().expect("Json rpc server fails");
+            Err(e)
+        }
+    }
 }

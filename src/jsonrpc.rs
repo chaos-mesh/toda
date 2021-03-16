@@ -1,34 +1,51 @@
-use jsonrpc_stdio_server::{ServerBuilder, jsonrpc_core::*};
 use jsonrpc_derive::rpc;
+use jsonrpc_stdio_server::{jsonrpc_core::*, ServerBuilder};
+use std::sync::{Mutex, mpsc};
 use tracing::info;
 
-pub async fn start_server() {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Comm {
+    Ok = 0,
+    Shutdown = 1,
+}
+
+pub async fn start_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) {
     info!("Starting jsonrpc server");
-    let server = new_server();
+    let server = new_server(status, tx);
     let server = server.build();
     server.await;
 }
 
-pub fn new_server() -> ServerBuilder {
-    let io = new_handler();
-    return ServerBuilder::new(io)
+pub fn new_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> ServerBuilder {
+    let io = new_handler(status, tx);
+    return ServerBuilder::new(io);
 }
 
-pub fn new_handler() -> IoHandler {
+pub fn new_handler(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> IoHandler {
     let mut io = IoHandler::new();
-    io.extend_with(RpcImpl.to_delegate());
+    io.extend_with(RpcImpl { status, tx:Mutex::new(tx) }.to_delegate());
     io
 }
 
 #[rpc]
 pub trait Rpc {
-	#[rpc(name = "ping")]
-	fn ping(&self) -> Result<String>;
+    #[rpc(name = "get_status")]
+    fn get_status(&self) -> Result<String>;
 }
 
-pub struct RpcImpl;
+pub struct RpcImpl {
+    status: anyhow::Result<()>,
+    tx: Mutex<mpsc::Sender<Comm>>,
+}
+
 impl Rpc for RpcImpl {
-	fn ping(&self) -> Result<String> {
-		Ok("pong".to_string())
-	}
+    fn get_status(&self) -> Result<String> {
+        match &self.status {
+            Ok(_) => Ok("ok".to_string()),
+            Err(e) => {
+                self.tx.lock().unwrap().send(Comm::Shutdown).expect("Send through channel failed");
+                Ok(e.to_string())
+            },
+        }
+    }
 }
