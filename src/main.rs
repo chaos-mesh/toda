@@ -198,6 +198,7 @@ fn main() -> Result<()> {
         }
         Err(e) => {
             while rx.recv().unwrap() != Comm::Shutdown {}
+            thread::sleep(std::time::Duration::from_millis(100)); // The rpc server need some time to finish the request
             Err(e)
         }
     }

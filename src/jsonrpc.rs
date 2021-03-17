@@ -1,7 +1,7 @@
 use jsonrpc_derive::rpc;
 use jsonrpc_stdio_server::{jsonrpc_core::*, ServerBuilder};
 use std::sync::{Mutex, mpsc};
-use tracing::info;
+use tracing::{info, trace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Comm {
@@ -17,11 +17,13 @@ pub async fn start_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) {
 }
 
 pub fn new_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> ServerBuilder {
+    info!("Creating jsonrpc server");
     let io = new_handler(status, tx);
     ServerBuilder::new(io)
 }
 
 pub fn new_handler(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> IoHandler {
+    info!("Creating jsonrpc handler");
     let mut io = IoHandler::new();
     io.extend_with(RpcImpl { status, tx:Mutex::new(tx) }.to_delegate());
     io
@@ -38,8 +40,15 @@ pub struct RpcImpl {
     tx: Mutex<mpsc::Sender<Comm>>,
 }
 
+impl Drop for RpcImpl {
+    fn drop(&mut self) {
+        println!("> Dropping RpcImpl");
+    }
+}
+
 impl Rpc for RpcImpl {
     fn get_status(&self) -> Result<String> {
+        trace!("rpc get_status called");
         match &self.status {
             Ok(_) => Ok("ok".to_string()),
             Err(e) => {
