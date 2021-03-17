@@ -18,7 +18,7 @@ pub async fn start_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) {
 
 pub fn new_server(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> ServerBuilder {
     let io = new_handler(status, tx);
-    return ServerBuilder::new(io);
+    ServerBuilder::new(io)
 }
 
 pub fn new_handler(status: anyhow::Result<()>, tx: mpsc::Sender<Comm>) -> IoHandler {
@@ -43,7 +43,8 @@ impl Rpc for RpcImpl {
         match &self.status {
             Ok(_) => Ok("ok".to_string()),
             Err(e) => {
-                self.tx.lock().unwrap().send(Comm::Shutdown).expect("Send through channel failed");
+                let tx = &self.tx.lock().unwrap();
+                tx.send(Comm::Shutdown).expect("Send through channel failed");
                 Ok(e.to_string())
             },
         }

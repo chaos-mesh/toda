@@ -46,7 +46,7 @@ use structopt::StructOpt;
 use tracing::{info, instrument, trace};
 use tracing_subscriber::EnvFilter;
 
-use jsonrpc::{Comm, start_server};
+use jsonrpc::{start_server, Comm};
 use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
 use std::{io, path::PathBuf, thread};
 
@@ -164,7 +164,6 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
-    info!("start with option: {:?}", option);
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
@@ -173,16 +172,17 @@ fn main() -> Result<()> {
         .with_writer(io::stderr)
         .with_env_filter(env_filter)
         .init();
+    info!("start with option: {:?}", option);
 
     let mount_injector = inject(option.clone());
 
-    let status = match &mount_injector{
-                Ok(_) => Ok(()),
-                Err(e) => Err(anyhow::Error::msg(e.to_string())),
-            };
-    
-    let (tx, rx)= mpsc::channel();
-    let server = thread::spawn(move || {
+    let status = match &mount_injector {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::Error::msg(e.to_string())),
+    };
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(|| {
         Runtime::new()
             .expect("Failed to create Tokio runtime")
             .block_on(start_server(status, tx));
@@ -195,10 +195,9 @@ fn main() -> Result<()> {
             info!("start to recover and exit");
             resume(option, v)?;
             Ok(())
-        },
+        }
         Err(e) => {
-            while(rx.recv().unwrap() != Comm::Shutdown){};
-            server.join().expect("Json rpc server fails");
+            while rx.recv().unwrap() != Comm::Shutdown {}
             Err(e)
         }
     }
