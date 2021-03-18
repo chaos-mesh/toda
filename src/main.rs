@@ -51,7 +51,6 @@ use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
 use std::{io, path::PathBuf, thread};
 
 use serde::Deserialize;
-
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
 struct Options {
