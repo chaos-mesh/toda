@@ -14,7 +14,7 @@ fuser = {version = "0.6", features = ["abi-7-31"]}
 time = "0.1"
 libc = "0.2"
 async-trait = "0.1"
-tokio = {version = "0.2", features = ["rt-core", "rt-threaded", "sync", "fs", "time", "blocking"]}
+tokio = {version = "0.2", features = ["rt-core", "rt-threaded", "sync", "fs", "time", "blocking", "macros", "full"]}
 thiserror = "1.0"
 futures = "0.3"
 derive_more = "0.99.9"
@@ -34,6 +34,10 @@ retry = "1.2.0"
 tracing = "0.1"
 tracing-futures = "0.2"
 tracing-subscriber = "0.2"
+jsonrpc-stdio-server = "17.0.0"
+jsonrpc-derive = "17.0.0"
+jsonrpc-core = "17.0.0"
+jsonrpc-core-client = "17.0.0"
 
 [profile.release]
 debug = true

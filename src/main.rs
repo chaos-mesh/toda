@@ -24,6 +24,7 @@ extern crate derive_more;
 mod fuse_device;
 mod hookfs;
 mod injector;
+mod jsonrpc;
 mod mount;
 mod mount_injector;
 mod ptrace;
@@ -34,6 +35,7 @@ mod utils;
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
 use replacer::{Replacer, UnionReplacer};
+use tokio::runtime::Runtime;
 use utils::encode_path;
 
 use anyhow::Result;
@@ -44,8 +46,9 @@ use structopt::StructOpt;
 use tracing::{info, instrument, trace};
 use tracing_subscriber::EnvFilter;
 
-use std::path::PathBuf;
-use std::{convert::TryFrom, os::unix::io::RawFd};
+use jsonrpc::{start_server, Comm};
+use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
+use std::{io, path::PathBuf, thread};
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -145,6 +148,12 @@ extern "C" fn signal_handler(_: libc::c_int) {
     }
 }
 
+fn wait_for_signal(chan: RawFd) -> Result<()> {
+    let mut buf = vec![0u8; 6];
+    read(chan, buf.as_mut_slice())?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let (reader, writer) = pipe()?;
     unsafe {
@@ -155,21 +164,42 @@ fn main() -> Result<()> {
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
-    info!("start with option: {:?}", option);
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_from(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
         .unwrap();
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    tracing_subscriber::fmt()
+        .with_writer(io::stderr)
+        .with_env_filter(env_filter)
+        .init();
+    info!("start with option: {:?}", option);
 
-    let mount_injector = inject(option.clone())?;
+    let mount_injector = inject(option.clone());
 
-    info!("waiting for signal to exit");
-    let mut buf = vec![0u8; 6];
-    read(reader, buf.as_mut_slice())?;
-    info!("start to recover and exit");
+    let status = match &mount_injector {
+        Ok(_) => Ok(()),
+        Err(e) => Err(anyhow::Error::msg(e.to_string())),
+    };
 
-    resume(option, mount_injector)?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(|| {
+        Runtime::new()
+            .expect("Failed to create Tokio runtime")
+            .block_on(start_server(status, tx));
+    });
 
-    Ok(())
+    match mount_injector {
+        Ok(v) => {
+            info!("waiting for signal to exit");
+            wait_for_signal(reader)?;
+            info!("start to recover and exit");
+            resume(option, v)?;
+            Ok(())
+        }
+        Err(e) => {
+            while rx.recv().unwrap() != Comm::Shutdown {}
+            thread::sleep(std::time::Duration::from_millis(1000)); // The rpc server need some time to finish the request
+            Err(e)
+        }
+    }
 }
