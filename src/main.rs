@@ -50,6 +50,8 @@ use jsonrpc::{start_server, Comm};
 use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
 use std::{io, path::PathBuf, thread};
 
+use serde::Deserialize;
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
 struct Options {
@@ -66,7 +68,8 @@ struct Options {
 #[instrument(skip(option))]
 fn inject(option: Options) -> Result<MountInjectionGuard> {
     trace!("parse injector configs");
-    let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
+    let mut de = serde_json::Deserializer::from_reader(std::io::stdin()); 
+    let injector_config: Vec<InjectorConfig> = Vec::<InjectorConfig>::deserialize(&mut de)?; // document says this works upon a persistant connection, instead of reading to EOF
     info!("inject with config {:?}", injector_config);
 
     let path = option.path.clone();

@@ -42,7 +42,7 @@ pub struct RpcImpl {
 
 impl Drop for RpcImpl {
     fn drop(&mut self) {
-        println!("> Dropping RpcImpl");
+        trace!("Dropping jrpc handler");
     }
 }
 
@@ -54,6 +54,7 @@ impl Rpc for RpcImpl {
             Err(e) => {
                 let tx = &self.tx.lock().unwrap();
                 tx.send(Comm::Shutdown).expect("Send through channel failed");
+                std::thread::sleep(std::time::Duration::from_millis(500)); // If tx was dropped too fast main thread would panic. This is too ugly.
                 Ok(e.to_string())
             },
         }
