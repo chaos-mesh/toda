@@ -47,7 +47,11 @@ use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 
 use jsonrpc::{start_server, Comm};
-use std::{convert::TryFrom, os::unix::io::RawFd, sync::{Mutex, mpsc}};
+use std::{
+    convert::TryFrom,
+    os::unix::io::RawFd,
+    sync::{mpsc, Mutex},
+};
 use std::{io, path::PathBuf, thread};
 
 #[derive(StructOpt, Debug, Clone)]
@@ -187,7 +191,11 @@ fn main() -> Result<()> {
         thread::spawn(|| {
             Runtime::new()
                 .expect("Failed to create Tokio runtime")
-                .block_on(start_server(jsonrpc::RpcImpl::new(Mutex::new(status),Mutex::new(tx),hookfs)));
+                .block_on(start_server(jsonrpc::RpcImpl::new(
+                    Mutex::new(status),
+                    Mutex::new(tx),
+                    hookfs,
+                )));
         });
     }
 
