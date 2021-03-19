@@ -1,15 +1,13 @@
-use super::filter;
-use super::Injector;
-
-use super::injector_config::FaultsConfig;
-use crate::hookfs::{Error, Result};
+use std::path::Path;
 
 use async_trait::async_trait;
 use nix::errno::Errno;
 use rand::Rng;
 use tracing::{debug, trace};
 
-use std::path::Path;
+use super::injector_config::FaultsConfig;
+use super::{filter, Injector};
+use crate::hookfs::{Error, Result};
 
 #[derive(Debug)]
 pub struct FaultInjector {

@@ -1,14 +1,12 @@
-use super::filter;
-use super::Injector;
-
-use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, FilterConfig};
-use crate::hookfs::Result;
+use std::path::Path;
 
 use async_trait::async_trait;
 use fuser::{FileAttr, FileType};
 use tracing::{debug, trace};
 
-use std::path::Path;
+use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, FilterConfig};
+use super::{filter, Injector};
+use crate::hookfs::Result;
 
 #[derive(Debug)]
 pub struct AttrOverrideInjector {

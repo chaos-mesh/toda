@@ -32,27 +32,24 @@ mod replacer;
 mod stop;
 mod utils;
 
-use injector::InjectorConfig;
-use mount_injector::{MountInjectionGuard, MountInjector};
-use replacer::{Replacer, UnionReplacer};
-use tokio::runtime::Runtime;
-use utils::encode_path;
+use std::convert::TryFrom;
+use std::os::unix::io::RawFd;
+use std::path::PathBuf;
+use std::sync::{mpsc, Mutex};
+use std::{io, thread};
 
 use anyhow::Result;
-
+use injector::InjectorConfig;
+use jsonrpc::{start_server, Comm};
+use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
+use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
+use tokio::runtime::Runtime;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
-
-use jsonrpc::{start_server, Comm};
-use std::{
-    convert::TryFrom,
-    os::unix::io::RawFd,
-    sync::{mpsc, Mutex},
-};
-use std::{io, path::PathBuf, thread};
+use utils::encode_path;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]

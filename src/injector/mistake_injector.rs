@@ -1,20 +1,13 @@
+use std::cmp::{max, min};
+use std::path::Path;
+
 use async_trait::async_trait;
 use rand::Rng;
-
-use std::{
-    cmp::{max, min},
-    path::Path,
-};
-
-use super::filter;
-use super::injector_config::MistakeConfig;
-use super::injector_config::MistakeType;
-use super::injector_config::MistakesConfig;
-use super::Injector;
-use crate::hookfs::Reply;
-use crate::hookfs::Result;
-
 use tracing::{debug, trace};
+
+use super::injector_config::{MistakeConfig, MistakeType, MistakesConfig};
+use super::{filter, Injector};
+use crate::hookfs::{Reply, Result};
 
 #[derive(Debug)]
 pub struct MistakeInjector {

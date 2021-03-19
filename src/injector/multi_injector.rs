@@ -1,17 +1,16 @@
-use super::attr_override_injector::AttrOverrideInjector;
-use super::fault_injector::FaultInjector;
-use super::filter;
-use super::injector_config::InjectorConfig;
-use super::latency_injector::LatencyInjector;
-use super::mistake_injector::MistakeInjector;
-use super::Injector;
-use crate::hookfs::{Reply, Result};
+use std::path::Path;
 
 use async_trait::async_trait;
 use fuser::FileAttr;
 use tracing::trace;
 
-use std::path::Path;
+use super::attr_override_injector::AttrOverrideInjector;
+use super::fault_injector::FaultInjector;
+use super::injector_config::InjectorConfig;
+use super::latency_injector::LatencyInjector;
+use super::mistake_injector::MistakeInjector;
+use super::{filter, Injector};
+use crate::hookfs::{Reply, Result};
 
 #[derive(Debug)]
 pub struct MultiInjector {
@@ -69,11 +68,7 @@ impl Injector for MultiInjector {
         }
     }
 
-    fn inject_write_data(
-        &self,
-        path: &Path,
-        data: &mut Vec<u8>,
-    ) -> Result<()> {
+    fn inject_write_data(&self, path: &Path, data: &mut Vec<u8>) -> Result<()> {
         for injector in self.injectors.iter() {
             injector.inject_write_data(path, data)?;
         }

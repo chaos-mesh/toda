@@ -1,15 +1,13 @@
-use async_trait::async_trait;
-
 use std::path::Path;
 use std::time::Duration;
 
-use super::filter;
-use super::injector_config::LatencyConfig;
-use super::Injector;
-use crate::hookfs::Result;
-
+use async_trait::async_trait;
 use tokio::time::delay_for;
 use tracing::{debug, trace};
+
+use super::injector_config::LatencyConfig;
+use super::{filter, Injector};
+use crate::hookfs::Result;
 
 #[derive(Debug)]
 pub struct LatencyInjector {

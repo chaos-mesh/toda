@@ -4,31 +4,6 @@ mod reply;
 pub mod runtime;
 mod utils;
 
-use crate::injector::Injector;
-use crate::injector::Method;
-use crate::injector::MultiInjector;
-
-use utils::*;
-
-use async_trait::async_trait;
-use derive_more::{Deref, DerefMut, From};
-use fuser::*;
-use slab::Slab;
-
-use libc::{c_void, lgetxattr, llistxattr, lremovexattr, lsetxattr};
-
-use nix::dir;
-use nix::errno::Errno;
-use nix::fcntl::{open, readlink, renameat, OFlag};
-use nix::sys::stat;
-use nix::sys::statfs;
-use nix::unistd::{
-    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
-    LinkatFlags, Uid, close,
-};
-
-use tracing::{debug, error, instrument, trace};
-
 use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
@@ -37,12 +12,28 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use async_fs::{AsyncFileSystem, AsyncFileSystemImpl};
+use async_trait::async_trait;
+use derive_more::{Deref, DerefMut, From};
 pub use errors::{HookFsError as Error, Result};
+use fuser::*;
+use libc::{c_void, lgetxattr, llistxattr, lremovexattr, lsetxattr};
+use nix::dir;
+use nix::errno::Errno;
+use nix::fcntl::{open, readlink, renameat, OFlag};
+use nix::sys::{stat, statfs};
+use nix::unistd::{
+    close, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
+    Gid, LinkatFlags, Uid,
+};
 pub use reply::Reply;
 use reply::*;
 use runtime::spawn_blocking;
-
+use slab::Slab;
 use tokio::sync::RwLock;
+use tracing::{debug, error, instrument, trace};
+use utils::*;
+
+use crate::injector::{Injector, Method, MultiInjector};
 
 // use fuse::consts::FOPEN_DIRECT_IO;
 
@@ -50,7 +41,9 @@ macro_rules! inject {
     ($self:ident, $method:ident, $path:expr) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
             $self
-                .injector.read().await
+                .injector
+                .read()
+                .await
                 .inject(&Method::$method, $self.rebuild_path($path)?.as_path())
                 .await?;
         }
@@ -81,19 +74,19 @@ macro_rules! inject_with_fh {
 }
 
 macro_rules! inject_write_data {
-    ($self:ident, $fh:ident, $data:ident) => {
-        {
-            let opened_files = $self.opened_files.read().await;
-            if let Ok(file) = opened_files.get($fh as usize) {
-                let path = file.original_path().to_owned();
-                trace!("Write data before inject {:?}", $data);
-                $self
-                    .injector.read().await
-                    .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
-                trace!("Write data after inject {:?}", $data);
-            }
+    ($self:ident, $fh:ident, $data:ident) => {{
+        let opened_files = $self.opened_files.read().await;
+        if let Ok(file) = opened_files.get($fh as usize) {
+            let path = file.original_path().to_owned();
+            trace!("Write data before inject {:?}", $data);
+            $self
+                .injector
+                .read()
+                .await
+                .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
+            trace!("Write data after inject {:?}", $data);
         }
-    };
+    }};
 }
 
 macro_rules! inject_with_dir_fh {
@@ -123,7 +116,9 @@ macro_rules! inject_attr {
     ($self:ident, $attr:ident, $path:expr) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
             $self
-                .injector.read().await
+                .injector
+                .read()
+                .await
                 .inject_attr(&mut $attr, $self.rebuild_path($path)?.as_path());
         }
     };
@@ -765,7 +760,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[instrument(skip(self,data))]
+    #[instrument(skip(self, data))]
     async fn write(
         &self,
         _ino: u64,
@@ -815,7 +810,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("release");
 
         let mut opened_files = self.opened_files.write().await;
-        if let Ok(file) =  opened_files.get(fh as usize) {
+        if let Ok(file) = opened_files.get(fh as usize) {
             async_close(file.fd).await?;
         }
         opened_files.remove(fh as usize);

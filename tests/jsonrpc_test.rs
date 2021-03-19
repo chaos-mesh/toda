@@ -1,6 +1,5 @@
-use std::{
-    sync::{mpsc::channel, Mutex},
-};
+use std::sync::mpsc::channel;
+use std::sync::Mutex;
 
 use anyhow::anyhow;
 use toda::jsonrpc::{self, new_handler, Comm};

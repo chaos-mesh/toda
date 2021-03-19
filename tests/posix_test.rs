@@ -11,20 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use toda::hookfs;
-use toda::injector::MultiInjector;
-
 use std::ffi::OsStr;
 use std::fs::{read_link, read_to_string, write, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 
-use nix::fcntl;
 use nix::sys::stat;
-use nix::unistd;
+use nix::{fcntl, unistd};
+use toda::hookfs;
+use toda::injector::MultiInjector;
 
 // These tests are port from go-fuse test
 

@@ -1,21 +1,16 @@
-use crate::hookfs;
-use crate::injector::MultiInjector;
-use crate::mount;
-use crate::stop;
-use crate::injector::InjectorConfig;
-
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Result};
-
 use nix::mount::umount;
-
+use retry::delay::Fixed;
+use retry::{retry, OperationResult};
 use tracing::info;
 
-use retry::{delay::Fixed, retry, OperationResult};
+use crate::injector::{InjectorConfig, MultiInjector};
+use crate::{hookfs, mount, stop};
 
 #[derive(Debug)]
 pub struct MountInjector {

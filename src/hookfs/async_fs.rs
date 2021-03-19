@@ -1,20 +1,17 @@
+use std::ffi::OsString;
+use std::fmt::Debug;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use fuser::*;
+use tracing::trace_span;
 use tracing_futures::Instrument;
 
 use super::errors::Result;
 use super::reply::*;
 use super::runtime::spawn;
-
-use std::ffi::OsString;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::{
-    future::Future,
-    path::{Path, PathBuf},
-};
-
-use tracing::trace_span;
 
 pub fn spawn_reply<F, R, V>(id: u64, reply: R, f: F)
 where

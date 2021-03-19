@@ -6,15 +6,15 @@ mod latency_injector;
 mod mistake_injector;
 mod multi_injector;
 
+use std::path::Path;
+
+use async_trait::async_trait;
 pub use filter::Method;
+use fuser::FileAttr;
 pub use injector_config::InjectorConfig;
 pub use multi_injector::MultiInjector;
 
 use crate::hookfs::{Reply, Result};
-use async_trait::async_trait;
-use fuser::FileAttr;
-
-use std::{path::Path};
 
 #[async_trait]
 pub trait Injector: Send + Sync + std::fmt::Debug {
@@ -28,11 +28,7 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
     ) -> Result<()> {
         Ok(())
     }
-    fn inject_write_data(
-        &self,
-        _path: &Path,
-        _data: &mut Vec<u8>,
-    ) -> Result<()> {
+    fn inject_write_data(&self, _path: &Path, _data: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 

@@ -19,9 +19,9 @@
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
-pub mod injector;
-pub mod hookfs;
 pub mod fuse_device;
+pub mod hookfs;
+pub mod injector;
 pub mod jsonrpc;
 pub mod mount;
 pub mod mount_injector;

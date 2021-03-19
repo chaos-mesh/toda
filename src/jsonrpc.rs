@@ -1,10 +1,12 @@
-use crate::injector::{InjectorConfig, MultiInjector};
-use jsonrpc_derive::rpc;
-use jsonrpc_stdio_server::{jsonrpc_core::*, ServerBuilder};
 use std::sync::{mpsc, Arc, Mutex};
+
+use jsonrpc_derive::rpc;
+use jsonrpc_stdio_server::jsonrpc_core::*;
+use jsonrpc_stdio_server::ServerBuilder;
 use tracing::{info, trace};
 
 use crate::hookfs::HookFs;
+use crate::injector::{InjectorConfig, MultiInjector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Comm {
