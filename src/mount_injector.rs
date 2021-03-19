@@ -2,7 +2,7 @@ use crate::hookfs;
 use crate::injector::MultiInjector;
 use crate::mount;
 use crate::stop;
-use crate::InjectorConfig;
+use crate::injector::InjectorConfig;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ pub struct MountInjector {
 pub struct MountInjectionGuard {
     original_path: PathBuf,
     new_path: PathBuf,
-    hookfs: Arc<hookfs::HookFs>,
+    pub hookfs: Arc<hookfs::HookFs>,
     handler: Option<JoinHandle<Result<()>>>,
 }
 

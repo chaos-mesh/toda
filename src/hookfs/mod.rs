@@ -29,7 +29,7 @@ use nix::unistd::{
 
 use tracing::{debug, error, instrument, trace};
 
-use std::{collections::{HashMap, LinkedList}};
+use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
@@ -50,7 +50,7 @@ macro_rules! inject {
     ($self:ident, $method:ident, $path:expr) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
             $self
-                .injector
+                .injector.read().await
                 .inject(&Method::$method, $self.rebuild_path($path)?.as_path())
                 .await?;
         }
@@ -88,7 +88,7 @@ macro_rules! inject_write_data {
                 let path = file.original_path().to_owned();
                 trace!("Write data before inject {:?}", $data);
                 $self
-                    .injector
+                    .injector.read().await
                     .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
                 trace!("Write data after inject {:?}", $data);
             }
@@ -123,7 +123,7 @@ macro_rules! inject_attr {
     ($self:ident, $attr:ident, $path:expr) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
             $self
-                .injector
+                .injector.read().await
                 .inject_attr(&mut $attr, $self.rebuild_path($path)?.as_path());
         }
     };
@@ -133,7 +133,7 @@ macro_rules! inject_reply {
     ($self:ident, $method:ident, $path:expr, $reply:ident, $reply_typ:ident) => {
         if $self.enable_injection.load(Ordering::SeqCst) {
             trace!("before inject {:?}", $reply);
-            $self.injector.inject_reply(
+            $self.injector.read().await.inject_reply(
                 &Method::$method,
                 $self.rebuild_path($path)?.as_path(),
                 &mut Reply::$reply_typ(&mut $reply),
@@ -154,7 +154,7 @@ pub struct HookFs {
 
     opened_dirs: RwLock<FhMap<Dir>>,
 
-    injector: MultiInjector,
+    pub injector: RwLock<MultiInjector>,
 
     // map from inode to real path
     inode_map: RwLock<InodeMap>,
@@ -314,7 +314,7 @@ impl HookFs {
             original_path: original_path.as_ref().to_owned(),
             opened_files: RwLock::new(FhMap::from(Slab::new())),
             opened_dirs: RwLock::new(FhMap::from(Slab::new())),
-            injector,
+            injector: RwLock::new(injector),
             inode_map,
             enable_injection: AtomicBool::from(false),
         }

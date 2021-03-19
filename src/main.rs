@@ -43,14 +43,13 @@ use anyhow::Result;
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
-use tracing::{info, instrument, trace};
+use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 
 use jsonrpc::{start_server, Comm};
-use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
+use std::{convert::TryFrom, os::unix::io::RawFd, sync::{Mutex, mpsc}};
 use std::{io, path::PathBuf, thread};
 
-use serde::Deserialize;
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
 struct Options {
@@ -65,10 +64,7 @@ struct Options {
 }
 
 #[instrument(skip(option))]
-fn inject(option: Options) -> Result<MountInjectionGuard> {
-    trace!("parse injector configs");
-    let mut de = serde_json::Deserializer::from_reader(std::io::stdin()); 
-    let injector_config: Vec<InjectorConfig> = Vec::<InjectorConfig>::deserialize(&mut de)?; // document says this works upon a persistant connection, instead of reading to EOF
+fn inject(option: Options, injector_config: Vec<InjectorConfig>) -> Result<MountInjectionGuard> {
     info!("inject with config {:?}", injector_config);
 
     let path = option.path.clone();
@@ -175,8 +171,7 @@ fn main() -> Result<()> {
         .with_env_filter(env_filter)
         .init();
     info!("start with option: {:?}", option);
-
-    let mount_injector = inject(option.clone());
+    let mount_injector = inject(option.clone(), vec![]);
 
     let status = match &mount_injector {
         Ok(_) => Ok(()),
@@ -184,11 +179,17 @@ fn main() -> Result<()> {
     };
 
     let (tx, rx) = mpsc::channel();
-    thread::spawn(|| {
-        Runtime::new()
-            .expect("Failed to create Tokio runtime")
-            .block_on(start_server(status, tx));
-    });
+    {
+        let hookfs = match &mount_injector {
+            Ok(e) => Some(e.hookfs.clone().into()),
+            Err(_) => None,
+        };
+        thread::spawn(|| {
+            Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(start_server(jsonrpc::RpcImpl::new(Mutex::new(status),Mutex::new(tx),hookfs)));
+        });
+    }
 
     match mount_injector {
         Ok(v) => {

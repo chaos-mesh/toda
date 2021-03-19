@@ -20,7 +20,12 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod injector;
-
 pub mod hookfs;
-
+pub mod fuse_device;
 pub mod jsonrpc;
+pub mod mount;
+pub mod mount_injector;
+pub mod ptrace;
+pub mod replacer;
+pub mod stop;
+pub mod utils;
