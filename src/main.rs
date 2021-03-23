@@ -195,19 +195,11 @@ fn main() -> Result<()> {
                 )));
         });
     }
-
-    match mount_injector {
-        Ok(v) => {
-            info!("waiting for signal to exit");
-            wait_for_signal(reader)?;
-            info!("start to recover and exit");
-            resume(option, v)?;
-            Ok(())
-        }
-        Err(e) => {
-            while rx.recv().unwrap() != Comm::Shutdown {}
-            thread::sleep(std::time::Duration::from_millis(1000)); // The rpc server need some time to finish the request
-            Err(e)
-        }
+    info!("waiting for signal to exit");
+    wait_for_signal(reader)?;
+    info!("start to recover and exit");
+    if let Ok(v) = mount_injector {
+        resume(option, v)?;
     }
+    Ok(())
 }

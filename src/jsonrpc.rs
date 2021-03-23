@@ -36,7 +36,7 @@ pub fn new_handler(config: RpcImpl) -> IoHandler {
 #[rpc]
 pub trait Rpc {
     #[rpc(name = "get_status")]
-    fn get_status(&self) -> Result<String>;
+    fn get_status(&self, inst: String) -> Result<String>;
     #[rpc(name = "update")]
     fn update(&self, config: Vec<InjectorConfig>) -> Result<String>;
 }
@@ -64,8 +64,8 @@ impl Drop for RpcImpl {
 }
 
 impl Rpc for RpcImpl {
-    fn get_status(&self) -> Result<String> {
-        trace!("rpc get_status called");
+    fn get_status(&self, _inst: String) -> Result<String> {
+        info!("rpc get_status called");
         match &*self.status.lock().unwrap() {
             Ok(_) => Ok("ok".to_string()),
             Err(e) => {
@@ -77,7 +77,7 @@ impl Rpc for RpcImpl {
         }
     }
     fn update(&self, config: Vec<InjectorConfig>) -> Result<String> {
-        trace!("rpc update called");
+        info!("rpc update called");
         if let Err(e) = &*self.status.lock().unwrap() {
             return Ok(e.to_string());
         }
