@@ -11,7 +11,7 @@ fn test_status_good() {
         Mutex::new(tx),
         None,
     ));
-    let request = r#"{"jsonrpc": "2.0","method":"get_status","id":1}"#;
+    let request = r#"{"jsonrpc": "2.0","method":"get_status","params":[""],"id":1}"#;
     let response = r#"{"jsonrpc":"2.0","result":"ok","id":1}"#;
     assert_eq!(io.handle_request_sync(request), Some(response.to_string()));
 }
@@ -24,7 +24,7 @@ fn test_status_bad() {
         Mutex::new(tx),
         None,
     ));
-    let request = r#"{"jsonrpc": "2.0","method":"get_status","id":1}"#;
+    let request = r#"{"jsonrpc": "2.0","method":"get_status","params":[""],"id":1}"#;
     let response = r#"{"jsonrpc":"2.0","result":"Not good","id":1}"#;
     assert_eq!(io.handle_request_sync(request), Some(response.to_string()));
     assert_eq!(rx.recv().unwrap(), Comm::Shutdown);
