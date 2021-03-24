@@ -1,8 +1,15 @@
-[
-    {
-        "type": "latency",
-        "path": "/var/run/test/**/*",
-        "percent": 100,
-        "latency": "10ms"
-    }
-]
+{
+    "jsonrpc": "2.0",
+    "method": "update",
+    "params": [
+        [
+            {
+                "type": "latency",
+                "path": "/var/test/**/*",
+                "percent": 100,
+                "latency": "10ms"
+            }
+        ]
+    ],
+    "id": 1
+}
