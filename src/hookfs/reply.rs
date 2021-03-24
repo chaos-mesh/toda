@@ -1,10 +1,10 @@
-use fuser::*;
+use std::fmt::Debug;
 use std::time::Duration;
+
+use fuser::*;
 use tracing::{debug, error, trace};
 
 use super::errors::Result;
-
-use std::fmt::Debug;
 
 const TTL: Duration = Duration::from_secs(0);
 

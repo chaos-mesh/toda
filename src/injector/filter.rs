@@ -1,14 +1,13 @@
 use std::convert::TryFrom;
 use std::path::Path;
 
-use super::injector_config::FilterConfig;
-
 use anyhow::{anyhow, Error, Result};
 use bitflags::bitflags;
 use glob::{MatchOptions, Pattern};
 use rand::Rng;
-
 use tracing::{info, trace};
+
+use super::injector_config::FilterConfig;
 
 bitflags! {
     pub struct Method: u32 {

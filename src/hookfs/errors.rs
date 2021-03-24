@@ -1,7 +1,6 @@
 use nix::errno::Errno;
 use nix::Error;
 use thiserror::Error;
-
 use tracing::error;
 
 #[derive(Error, Debug)]

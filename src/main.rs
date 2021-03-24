@@ -32,23 +32,24 @@ mod replacer;
 mod stop;
 mod utils;
 
-use injector::InjectorConfig;
-use mount_injector::{MountInjectionGuard, MountInjector};
-use replacer::{Replacer, UnionReplacer};
-use tokio::runtime::Runtime;
-use utils::encode_path;
+use std::convert::TryFrom;
+use std::os::unix::io::RawFd;
+use std::path::PathBuf;
+use std::sync::{mpsc, Mutex};
+use std::{io, thread};
 
 use anyhow::Result;
-
+use injector::InjectorConfig;
+use jsonrpc::{start_server, Comm};
+use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
+use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
-use tracing::{info, instrument, trace};
+use tokio::runtime::Runtime;
+use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
-
-use jsonrpc::{start_server, Comm};
-use std::{convert::TryFrom, os::unix::io::RawFd, sync::mpsc};
-use std::{io, path::PathBuf, thread};
+use utils::encode_path;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -64,9 +65,7 @@ struct Options {
 }
 
 #[instrument(skip(option))]
-fn inject(option: Options) -> Result<MountInjectionGuard> {
-    trace!("parse injector configs");
-    let injector_config: Vec<InjectorConfig> = serde_json::from_reader(std::io::stdin())?;
+fn inject(option: Options, injector_config: Vec<InjectorConfig>) -> Result<MountInjectionGuard> {
     info!("inject with config {:?}", injector_config);
 
     let path = option.path.clone();
@@ -173,8 +172,7 @@ fn main() -> Result<()> {
         .with_env_filter(env_filter)
         .init();
     info!("start with option: {:?}", option);
-
-    let mount_injector = inject(option.clone());
+    let mount_injector = inject(option.clone(), vec![]);
 
     let status = match &mount_injector {
         Ok(_) => Ok(()),
@@ -182,24 +180,26 @@ fn main() -> Result<()> {
     };
 
     let (tx, rx) = mpsc::channel();
-    thread::spawn(|| {
-        Runtime::new()
-            .expect("Failed to create Tokio runtime")
-            .block_on(start_server(status, tx));
-    });
-
-    match mount_injector {
-        Ok(v) => {
-            info!("waiting for signal to exit");
-            wait_for_signal(reader)?;
-            info!("start to recover and exit");
-            resume(option, v)?;
-            Ok(())
-        }
-        Err(e) => {
-            while rx.recv().unwrap() != Comm::Shutdown {}
-            thread::sleep(std::time::Duration::from_millis(1000)); // The rpc server need some time to finish the request
-            Err(e)
-        }
+    {
+        let hookfs = match &mount_injector {
+            Ok(e) => Some(e.hookfs.clone().into()),
+            Err(_) => None,
+        };
+        thread::spawn(|| {
+            Runtime::new()
+                .expect("Failed to create Tokio runtime")
+                .block_on(start_server(jsonrpc::RpcImpl::new(
+                    Mutex::new(status),
+                    Mutex::new(tx),
+                    hookfs,
+                )));
+        });
     }
+    info!("waiting for signal to exit");
+    wait_for_signal(reader)?;
+    info!("start to recover and exit");
+    if let Ok(v) = mount_injector {
+        resume(option, v)?;
+    }
+    Ok(())
 }

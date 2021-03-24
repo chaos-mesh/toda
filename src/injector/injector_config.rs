@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
@@ -88,7 +88,7 @@ pub struct Timespec {
 #[serde(rename_all = "camelCase")]
 pub enum MistakeType {
     Zero,
-    Random
+    Random,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

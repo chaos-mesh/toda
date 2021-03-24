@@ -2,9 +2,7 @@ use std::fs::create_dir_all;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-
 use nix::mount::{mount, MsFlags};
-
 use procfs::process::{self, Process};
 
 #[derive(Debug, Clone)]

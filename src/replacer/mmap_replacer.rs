@@ -1,24 +1,18 @@
-use super::ptrace;
-use super::utils::all_processes;
-use super::Replacer;
-
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{Cursor, Read, Write};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
+use anyhow::{anyhow, Result};
+use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
+use itertools::Itertools;
+use nix::sys::mman::{MapFlags, ProtFlags};
+use procfs::process::MMapPath;
 use tracing::{error, info, trace};
 
-use procfs::process::MMapPath;
-
-use anyhow::{anyhow, Result};
-
-use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
-
-use itertools::Itertools;
-
-use nix::sys::mman::{MapFlags, ProtFlags};
+use super::utils::all_processes;
+use super::{ptrace, Replacer};
 
 #[derive(Clone, Debug)]
 struct ReplaceCase {

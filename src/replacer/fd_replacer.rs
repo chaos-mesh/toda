@@ -1,21 +1,17 @@
-use super::ptrace;
-use super::utils::all_processes;
-use super::Replacer;
-
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::{Cursor, Read, Write};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
-use std::{collections::HashMap, fmt::Debug};
 
 use anyhow::{anyhow, Result};
-
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
-
+use itertools::Itertools;
+use procfs::process::FDTarget;
 use tracing::{error, info, trace};
 
-use procfs::process::FDTarget;
-
-use itertools::Itertools;
+use super::utils::all_processes;
+use super::{ptrace, Replacer};
 
 #[derive(Clone, Copy)]
 #[repr(packed)]

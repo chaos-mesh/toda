@@ -1,5 +1,4 @@
 use anyhow::Result;
-
 use procfs::process::{self, Process};
 
 pub fn all_processes() -> Result<impl Iterator<Item = Process>> {

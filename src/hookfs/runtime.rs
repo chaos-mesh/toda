@@ -1,11 +1,9 @@
-use once_cell::sync::Lazy;
-
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
-
 use std::future::Future;
 use std::sync::RwLock;
 
+use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 use tracing::trace;
 
 pub static RUNTIME: Lazy<RwLock<Option<Runtime>>> = Lazy::new(|| {

@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 struct Stop {
     inner: Mutex<bool>,
