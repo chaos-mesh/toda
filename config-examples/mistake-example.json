@@ -1,14 +1,23 @@
-[
-    {
-        "type": "mistake",
-        "path": "/tmp/test/test.txt",
-        "methods":["READ","WRITE"],
-        "mistake":
+{
+    "jsonrpc": "2.0",
+    "method": "update",
+    "params": [
+        [
             {
-                "filling":"zero",
-                "maxOccurrences":1,
-                "maxLength":10
-            },
-        "percent":100
-    }
-]
+                "type": "mistake",
+                "path": "/var/test/**/*",
+                "methods": [
+                    "READ",
+                    "WRITE"
+                ],
+                "mistake": {
+                    "filling": "zero",
+                    "maxOccurrences": 1,
+                    "maxLength": 10000
+                },
+                "percent": 100
+            }
+        ]
+    ],
+    "id": 1
+}
