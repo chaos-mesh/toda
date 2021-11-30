@@ -40,7 +40,7 @@ use std::{io, thread};
 
 use anyhow::Result;
 use injector::InjectorConfig;
-use jsonrpc::{start_server, Comm};
+use jsonrpc::start_server;
 use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
@@ -179,7 +179,7 @@ fn main() -> Result<()> {
         Err(e) => Err(anyhow::Error::msg(e.to_string())),
     };
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, _rx) = mpsc::channel();
     {
         let hookfs = match &mount_injector {
             Ok(e) => Some(e.hookfs.clone().into()),
