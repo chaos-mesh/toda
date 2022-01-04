@@ -37,7 +37,6 @@ use replacer::{Replacer, UnionReplacer};
 use utils::encode_path;
 
 use anyhow::Result;
-
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use structopt::StructOpt;
@@ -72,7 +71,7 @@ fn inject(option: Options) -> Result<MountInjectionGuard> {
     let path = path.canonicalize()?;
 
     let replacer = if !option.mount_only {
-        let mut replacer = UnionReplacer::new();
+        let mut replacer = UnionReplacer::default();
         replacer.prepare(&path, &path)?;
 
         Some(replacer)
@@ -114,7 +113,7 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     let (_, new_path) = encode_path(&path)?;
 
     let replacer = if !option.mount_only {
-        let mut replacer = UnionReplacer::new();
+        let mut replacer = UnionReplacer::default();
         replacer.prepare(&path, &new_path)?;
         info!("running replacer");
         let result = replacer.run();

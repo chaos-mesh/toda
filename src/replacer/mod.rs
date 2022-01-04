@@ -15,17 +15,12 @@ pub trait Replacer {
     fn run(&mut self) -> Result<()>;
 }
 
+#[derive(Default)]
 pub struct UnionReplacer<'a> {
     replacers: Vec<Box<dyn Replacer + 'a>>,
 }
 
 impl<'a> UnionReplacer<'a> {
-    pub fn new() -> UnionReplacer<'a> {
-        UnionReplacer {
-            replacers: Vec::new(),
-        }
-    }
-
     pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
         &mut self,
         detect_path: P1,
