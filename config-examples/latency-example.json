@@ -5,7 +5,7 @@
         [
             {
                 "type": "latency",
-                "path": "/var/test/**/*",
+                "path": "/var/lib/postgresql/data/**/*",
                 "percent": 100,
                 "latency": "10ms"
             }

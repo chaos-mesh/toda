@@ -9,8 +9,7 @@ use super::{ptrace, Replacer};
 
 #[derive(Debug)]
 pub struct CwdReplacer {
-    processes: Vec<ptrace::TracedProcess>,
-    new_path: PathBuf,
+    processes: Vec<(ptrace::TracedProcess, PathBuf)>,
 }
 
 impl CwdReplacer {
@@ -34,8 +33,13 @@ impl CwdReplacer {
                 }
             })
             .filter(|(_, path)| path.starts_with(detect_path.as_ref()))
-            .filter_map(|(pid, _)| match ptrace::trace(pid) {
-                Ok(process) => Some(process),
+            .filter_map(|(pid, path)| match ptrace::trace(pid) {
+                Ok(process) => {
+                    let mut new_path = new_path.as_ref().to_path_buf();
+
+                    new_path.push(path.strip_prefix(detect_path.as_ref()).unwrap());
+                    Some((process, new_path))
+                }
                 Err(err) => {
                     error!("fail to ptrace process: pid({}) with error: {:?}", pid, err);
                     None
@@ -43,18 +47,16 @@ impl CwdReplacer {
             })
             .collect();
 
-        Ok(CwdReplacer {
-            processes,
-            new_path: new_path.as_ref().to_owned(),
-        })
+        Ok(CwdReplacer { processes })
     }
 }
 
 impl Replacer for CwdReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running cwd replacer");
-        for process in self.processes.iter() {
-            process.chdir(&self.new_path)?;
+        for (process, new_path) in self.processes.iter() {
+            trace!("replacing cwd: {} to {:?}", process.pid, new_path);
+            process.chdir(new_path)?;
         }
 
         Ok(())
