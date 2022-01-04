@@ -85,11 +85,11 @@ impl Rpc for RpcImpl {
         if let Err(e) = &injectors {
             return Ok(e.to_string());
         }
-        futures::executor::block_on((async || {
+        futures::executor::block_on(async {
             let hookfs = self.hookfs.as_ref().unwrap();
             let mut current_injectors = hookfs.injector.write().await;
             *current_injectors = injectors.unwrap();
-        })());
+        });
         Ok("ok".to_string())
     }
 }

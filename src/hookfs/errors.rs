@@ -68,11 +68,11 @@ impl From<tokio::task::JoinError> for HookFsError {
     }
 }
 
-impl Into<libc::c_int> for HookFsError {
-    fn into(self) -> libc::c_int {
+impl From<HookFsError> for libc::c_int {
+    fn from(err: HookFsError) -> libc::c_int {
         use HookFsError::*;
 
-        match self {
+        match err {
             Sys(errno) => errno as i32,
             InodeNotFound { inode: _ } => libc::EFAULT,
             FhNotFound { fh: _ } => libc::EFAULT,

@@ -73,8 +73,8 @@ impl MistakeInjector {
             );
             match mistake.filling {
                 MistakeType::Zero => {
-                    for i in pos..pos + length {
-                        data[i] = 0;
+                    for item in data.iter_mut().skip(pos).take(length) {
+                        *item = 0;
                     }
                 }
                 MistakeType::Random => rng.fill(&mut data[pos..pos + length]),

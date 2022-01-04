@@ -90,17 +90,15 @@ impl PtraceManager {
                 while iterations > 0 {
                     let mut new_threads_found = false;
                     let process = procfs::process::Process::new(raw_pid)?;
-                    for task in process.tasks()? {
-                        if let Ok(task) = task {
-                            if traced_tasks.contains(&task.tid) {
-                                continue;
-                            }
+                    for task in process.tasks()?.flatten() {
+                        if traced_tasks.contains(&task.tid) {
+                            continue;
+                        }
 
-                            if let Ok(()) = attach_task(&task) {
-                                trace!("newly traced task: {}", task.tid);
-                                new_threads_found = true;
-                                traced_tasks.insert(task.tid);
-                            }
+                        if let Ok(()) = attach_task(&task) {
+                            trace!("newly traced task: {}", task.tid);
+                            new_threads_found = true;
+                            traced_tasks.insert(task.tid);
                         }
                     }
 
@@ -142,22 +140,20 @@ impl PtraceManager {
                             Ok(process) => match process.tasks() {
                                 Err(err) => OperationResult::Retry(err.into()),
                                 Ok(tasks) => {
-                                    for task in tasks {
-                                        if let Ok(task) = task {
-                                            match ptrace::detach(Pid::from_raw(task.tid), None) {
-                                                    Ok(()) => {
-                                                        info!("successfully detached task: {}", task.tid);
-                                                    }
-                                                    Err(Sys(Errno::ESRCH)) => trace!(
-                                                        "task {} doesn't exist, maybe has stopped or not traced",
-                                                        task.tid
-                                                    ),
-                                                    Err(err) => {
-                                                        warn!("fail to detach: {:?}", err)
-                                                    },
+                                    for task in tasks.flatten() {
+                                        match ptrace::detach(Pid::from_raw(task.tid), None) {
+                                                Ok(()) => {
+                                                    info!("successfully detached task: {}", task.tid);
                                                 }
-                                            trace!("detach task: {} successfully", task.tid);
-                                        }
+                                                Err(Sys(Errno::ESRCH)) => trace!(
+                                                    "task {} doesn't exist, maybe has stopped or not traced",
+                                                    task.tid
+                                                ),
+                                                Err(err) => {
+                                                    warn!("fail to detach: {:?}", err)
+                                                },
+                                            }
+                                        trace!("detach task: {} successfully", task.tid);
                                     }
                                     info!("detach process: {} successfully", pid);
                                     OperationResult::Ok(())

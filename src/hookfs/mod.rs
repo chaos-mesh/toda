@@ -300,7 +300,7 @@ impl HookFs {
         injector: MultiInjector,
     ) -> HookFs {
         let mut inode_map = InodeMap::from(HashMap::new());
-        inode_map.insert_path(1, original_path.as_ref().to_owned());
+        inode_map.insert_path(1, original_path.as_ref());
 
         let inode_map = RwLock::new(inode_map);
 
@@ -333,7 +333,7 @@ impl HookFs {
 
 impl HookFs {
     async fn get_file_attr(&self, path: &Path) -> Result<FileAttr> {
-        let mut attr = async_stat(&path)
+        let mut attr = async_stat(path)
             .await
             .map(convert_libc_stat_to_fuse_stat)??;
 
@@ -401,7 +401,7 @@ impl AsyncFileSystemImpl for HookFs {
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?;
         trace!("getting attr from path {}", path.display());
-        let stat = self.get_file_attr(&path).await?;
+        let stat = self.get_file_attr(path).await?;
 
         trace!("return with {:?}", stat);
 
@@ -436,21 +436,21 @@ impl AsyncFileSystemImpl for HookFs {
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?;
 
-        async_lchown(&path, uid, gid).await?;
+        async_lchown(path, uid, gid).await?;
 
         if let Some(mode) = mode {
-            async_fchmodat(&path, mode).await?;
+            async_fchmodat(path, mode).await?;
         }
 
         if let Some(size) = size {
-            async_truncate(&path, size as i64).await?;
+            async_truncate(path, size as i64).await?;
         }
 
         let times = [convert_time(atime), convert_time(mtime)];
         let cpath = CString::new(path.as_os_str().as_bytes())?;
         async_utimensat(cpath, times).await?;
 
-        let stat = self.get_file_attr(&path).await?;
+        let stat = self.get_file_attr(path).await?;
         trace!("return with {:?}", stat);
         let mut reply = Attr::new(stat);
         inject_reply!(self, GETATTR, path, reply, Attr);
@@ -466,7 +466,7 @@ impl AsyncFileSystemImpl for HookFs {
         let inode_map = self.inode_map.read().await;
         let link_path = inode_map.get_path(ino)?;
 
-        let path = async_readlink(&link_path).await?;
+        let path = async_readlink(link_path).await?;
 
         let path = CString::new(path.as_os_str().as_bytes())?;
 
@@ -727,7 +727,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         trace!("open with flags: {:?}", filtered_flags);
 
-        let fd = async_open(&path, filtered_flags, stat::Mode::S_IRWXU).await?;
+        let fd = async_open(path, filtered_flags, stat::Mode::S_IRWXU).await?;
         let fh = self.opened_files.write().await.insert(File::new(fd, path)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
