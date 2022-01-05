@@ -7,7 +7,7 @@
                 "type": "latency",
                 "path": "/var/lib/postgresql/data/**/*",
                 "percent": 100,
-                "latency": "10ms"
+                "latency": "10s"
             }
         ]
     ],

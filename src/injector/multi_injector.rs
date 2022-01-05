@@ -74,4 +74,10 @@ impl Injector for MultiInjector {
         }
         Ok(())
     }
+
+    fn interrupt(&self) {
+        for injector in self.injectors.iter() {
+            injector.interrupt();
+        }
+    }
 }

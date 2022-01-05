@@ -33,4 +33,6 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
     }
 
     fn inject_attr(&self, _attr: &mut FileAttr, _path: &Path) {}
+
+    fn interrupt(&self) {}
 }

@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::time::delay_for;
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use super::injector_config::LatencyConfig;
@@ -13,6 +15,7 @@ use crate::hookfs::Result;
 pub struct LatencyInjector {
     latency: Duration,
     filter: filter::Filter,
+    cancel_token: CancellationToken,
 }
 
 #[async_trait]
@@ -20,12 +23,26 @@ impl Injector for LatencyInjector {
     async fn inject(&self, method: &filter::Method, path: &Path) -> Result<()> {
         trace!("test for filter");
         if self.filter.filter(method, path) {
-            debug!("inject io delay {:?}", self.latency);
-            delay_for(self.latency).await;
+            let token = self.cancel_token.clone();
+            let latency = self.latency;
+            debug!("inject io delay {:?}", latency);
+
+            select! {
+                _ = delay_for(latency) => {}
+                _ = token.cancelled() => {
+                    debug!("cancelled");
+                }
+            }
+
             debug!("latency finished");
         }
 
         Ok(())
+    }
+
+    fn interrupt(&self) {
+        debug!("interrupt latency");
+        self.cancel_token.cancel();
     }
 }
 
@@ -36,6 +53,7 @@ impl LatencyInjector {
         Ok(Self {
             latency: conf.latency,
             filter: filter::Filter::build(conf.filter)?,
+            cancel_token: CancellationToken::new(),
         })
     }
 }
