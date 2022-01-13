@@ -23,13 +23,13 @@ use nix::fcntl::{open, readlink, renameat, OFlag};
 use nix::sys::stat;
 use nix::sys::statfs;
 use nix::unistd::{
-    fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags, Gid,
-    LinkatFlags, Uid, close,
+    close, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
+    Gid, LinkatFlags, Uid,
 };
 
 use tracing::{debug, error, instrument, trace};
 
-use std::{collections::{HashMap, LinkedList}};
+use std::collections::{HashMap, LinkedList};
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
@@ -81,19 +81,17 @@ macro_rules! inject_with_fh {
 }
 
 macro_rules! inject_write_data {
-    ($self:ident, $fh:ident, $data:ident) => {
-        {
-            let opened_files = $self.opened_files.read().await;
-            if let Ok(file) = opened_files.get($fh as usize) {
-                let path = file.original_path().to_owned();
-                trace!("Write data before inject {:?}", $data);
-                $self
-                    .injector
-                    .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
-                trace!("Write data after inject {:?}", $data);
-            }
+    ($self:ident, $fh:ident, $data:ident) => {{
+        let opened_files = $self.opened_files.read().await;
+        if let Ok(file) = opened_files.get($fh as usize) {
+            let path = file.original_path().to_owned();
+            trace!("Write data before inject {:?}", $data);
+            $self
+                .injector
+                .inject_write_data($self.rebuild_path(path)?.as_path(), &mut $data)?;
+            trace!("Write data after inject {:?}", $data);
         }
-    };
+    }};
 }
 
 macro_rules! inject_with_dir_fh {
@@ -326,6 +324,8 @@ impl HookFs {
 
     pub fn disable_injection(&self) {
         self.enable_injection.store(false, Ordering::SeqCst);
+
+        self.injector.interrupt();
     }
 
     pub fn rebuild_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
@@ -765,7 +765,7 @@ impl AsyncFileSystemImpl for HookFs {
         Ok(reply)
     }
 
-    #[instrument(skip(self,data))]
+    #[instrument(skip(self, data))]
     async fn write(
         &self,
         _ino: u64,
@@ -815,7 +815,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("release");
 
         let mut opened_files = self.opened_files.write().await;
-        if let Ok(file) =  opened_files.get(fh as usize) {
+        if let Ok(file) = opened_files.get(fh as usize) {
             async_close(file.fd).await?;
         }
         opened_files.remove(fh as usize);

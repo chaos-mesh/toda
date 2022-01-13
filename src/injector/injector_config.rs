@@ -88,7 +88,7 @@ pub struct Timespec {
 #[serde(rename_all = "camelCase")]
 pub enum MistakeType {
     Zero,
-    Random
+    Random,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

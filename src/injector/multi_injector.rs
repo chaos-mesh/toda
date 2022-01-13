@@ -69,14 +69,16 @@ impl Injector for MultiInjector {
         }
     }
 
-    fn inject_write_data(
-        &self,
-        path: &Path,
-        data: &mut Vec<u8>,
-    ) -> Result<()> {
+    fn inject_write_data(&self, path: &Path, data: &mut Vec<u8>) -> Result<()> {
         for injector in self.injectors.iter() {
             injector.inject_write_data(path, data)?;
         }
         Ok(())
+    }
+
+    fn interrupt(&self) {
+        for injector in self.injectors.iter() {
+            injector.interrupt();
+        }
     }
 }

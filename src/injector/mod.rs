@@ -14,7 +14,7 @@ use crate::hookfs::{Reply, Result};
 use async_trait::async_trait;
 use fuser::FileAttr;
 
-use std::{path::Path};
+use std::path::Path;
 
 #[async_trait]
 pub trait Injector: Send + Sync + std::fmt::Debug {
@@ -28,13 +28,11 @@ pub trait Injector: Send + Sync + std::fmt::Debug {
     ) -> Result<()> {
         Ok(())
     }
-    fn inject_write_data(
-        &self,
-        _path: &Path,
-        _data: &mut Vec<u8>,
-    ) -> Result<()> {
+    fn inject_write_data(&self, _path: &Path, _data: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 
     fn inject_attr(&self, _attr: &mut FileAttr, _path: &Path) {}
+
+    fn interrupt(&self) {}
 }

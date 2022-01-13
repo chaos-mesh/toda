@@ -109,14 +109,13 @@ impl Filter {
             })
             .unwrap_or(Method::all());
 
-        let path_filter = conf
-            .path.and_then(|path| -> Option<Pattern> {
-                if !path.is_empty() {
-                    Pattern::new(&path).ok()
-                } else {
-                    None
-                }
-            });
+        let path_filter = conf.path.and_then(|path| -> Option<Pattern> {
+            if !path.is_empty() {
+                Pattern::new(&path).ok()
+            } else {
+                None
+            }
+        });
         Ok(Self {
             path_filter,
             methods,

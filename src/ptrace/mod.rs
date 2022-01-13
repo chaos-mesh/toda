@@ -1,4 +1,3 @@
-use Error::Internal;
 use anyhow::{anyhow, Result};
 use nix::sys::ptrace;
 use nix::sys::signal::Signal;
@@ -10,16 +9,21 @@ use nix::{
     sys::mman::{MapFlags, ProtFlags},
     Error::Sys,
 };
+use Error::Internal;
 
-use procfs::{ProcError, process::Task};
-use retry::{Error::{self, Operation}, OperationResult, delay::Fixed};
+use procfs::{process::Task, ProcError};
+use retry::{
+    delay::Fixed,
+    Error::{self, Operation},
+    OperationResult,
+};
 use tracing::{error, info, instrument, trace, warn};
 
-use std::{cell::RefCell, collections::HashSet};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::{cell::RefCell, collections::HashSet};
 
 // There should be only one PtraceManager in one thread. But as we don't implement TLS
 // , we cannot use thread-local variables safely.
@@ -56,8 +60,8 @@ fn attach_task(task: &Task) -> Result<()> {
         }
         Err(err) => {
             warn!("attach error: {:?}", err);
-            return Err(err.into())
-        },
+            return Err(err.into());
+        }
         _ => {}
     }
     info!("attach task: {} successfully", task.tid);
@@ -93,9 +97,9 @@ impl PtraceManager {
                     let process = procfs::process::Process::new(raw_pid)?;
                     for task in (process.tasks()?).flatten() {
                         if traced_tasks.contains(&task.tid) {
-                            continue
+                            continue;
                         }
-                    
+
                         if let Ok(()) = attach_task(&task) {
                             trace!("newly traced task: {}", task.tid);
                             new_threads_found = true;
@@ -127,8 +131,9 @@ impl PtraceManager {
                     counter_ref.remove(&pid);
 
                     info!("detach process: {}", pid);
-                    if let Err(err) = retry::retry::<_, _, _, anyhow::Error, _>(Fixed::from_millis(500).take(20), || {
-                        match procfs::process::Process::new(pid) {
+                    if let Err(err) = retry::retry::<_, _, _, anyhow::Error, _>(
+                        Fixed::from_millis(500).take(20),
+                        || match procfs::process::Process::new(pid) {
                             Err(ProcError::NotFound(_)) => {
                                 info!("process {} not found", pid);
                                 OperationResult::Ok(())
@@ -137,14 +142,11 @@ impl PtraceManager {
                                 warn!("fail to detach task: {}, retry", pid);
                                 OperationResult::Retry(err.into())
                             }
-                            Ok(process) => {
-                                match process.tasks() {
-                                    Err(err) => {
-                                        OperationResult::Retry(err.into())
-                                    }
-                                    Ok(tasks) => {
-                                        for task in tasks.flatten() {
-                                            match ptrace::detach(Pid::from_raw(task.tid), None) {
+                            Ok(process) => match process.tasks() {
+                                Err(err) => OperationResult::Retry(err.into()),
+                                Ok(tasks) => {
+                                    for task in tasks.flatten() {
+                                        match ptrace::detach(Pid::from_raw(task.tid), None) {
                                                 Ok(()) => {
                                                     info!("successfully detached task: {}", task.tid);
                                                 }
@@ -156,21 +158,21 @@ impl PtraceManager {
                                                     warn!("fail to detach: {:?}", err)
                                                 },
                                             }
-                                            trace!("detach task: {} successfully", task.tid);
-                                        }
-                                        info!("detach process: {} successfully", pid);
-                                        OperationResult::Ok(())
+                                        trace!("detach task: {} successfully", task.tid);
                                     }
+                                    info!("detach process: {} successfully", pid);
+                                    OperationResult::Ok(())
                                 }
-                                
-                            }
-                        }
-                    }) {
+                            },
+                        },
+                    ) {
                         warn!("fail to detach: {:?}", err);
                         match err {
-                            Operation {error: e, total_delay:_, tries:_, } => {
-                                return Err(e)
-                            },
+                            Operation {
+                                error: e,
+                                total_delay: _,
+                                tries: _,
+                            } => return Err(e),
                             Internal(err) => {
                                 error!("internal error: {:?}", err)
                             }
