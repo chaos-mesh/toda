@@ -22,7 +22,7 @@
 pub mod fuse_device;
 pub mod hookfs;
 pub mod injector;
-pub mod jsonrpc;
+pub mod todarpc;
 pub mod mount;
 pub mod mount_injector;
 pub mod ptrace;

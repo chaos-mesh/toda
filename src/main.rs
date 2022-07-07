@@ -24,7 +24,8 @@ extern crate derive_more;
 mod fuse_device;
 mod hookfs;
 mod injector;
-mod jsonrpc;
+mod cmd;
+mod todarpc;
 mod mount;
 mod mount_injector;
 mod ptrace;
@@ -36,20 +37,20 @@ use std::convert::TryFrom;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
-use std::{io, thread};
+use std::{io};
 
 use anyhow::Result;
 use injector::InjectorConfig;
-use jsonrpc::start_server;
 use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
-use tokio::runtime::Runtime;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 use utils::encode_path;
+use crate::cmd::interactive::handler::TodaServer;
+use crate::todarpc::TodaRpc;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -185,15 +186,9 @@ fn main() -> Result<()> {
             Ok(e) => Some(e.hookfs.clone()),
             Err(_) => None,
         };
-        thread::spawn(|| {
-            Runtime::new()
-                .expect("Failed to create Tokio runtime")
-                .block_on(start_server(jsonrpc::RpcImpl::new(
-                    Mutex::new(status),
-                    Mutex::new(tx),
-                    hookfs,
-                )));
-        });
+        let mut toda_server = TodaServer::new(TodaRpc::new(Mutex::new(status),Mutex::new(tx),hookfs));
+        toda_server.serve_interactive();
+
     }
     info!("waiting for signal to exit");
     wait_for_signal(reader)?;

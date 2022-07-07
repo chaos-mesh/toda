@@ -1,8 +1,5 @@
 use std::sync::{mpsc, Arc, Mutex};
 
-use jsonrpc_derive::rpc;
-use jsonrpc_stdio_server::jsonrpc_core::*;
-use jsonrpc_stdio_server::ServerBuilder;
 use tracing::{info, trace};
 
 use crate::hookfs::HookFs;
@@ -13,41 +10,14 @@ pub enum Comm {
     Shutdown = 0,
 }
 
-pub async fn start_server(config: RpcImpl) {
-    info!("Starting jsonrpc server");
-    let server = new_server(config);
-    let server = server.build();
-    server.await;
-}
-
-pub fn new_server(config: RpcImpl) -> ServerBuilder {
-    info!("Creating jsonrpc server");
-    let io = new_handler(config);
-    ServerBuilder::new(io)
-}
-
-pub fn new_handler(config: RpcImpl) -> IoHandler {
-    info!("Creating jsonrpc handler");
-    let mut io = IoHandler::new();
-    io.extend_with(config.to_delegate());
-    io
-}
-
-#[rpc]
-pub trait Rpc {
-    #[rpc(name = "get_status")]
-    fn get_status(&self, inst: String) -> Result<String>;
-    #[rpc(name = "update")]
-    fn update(&self, config: Vec<InjectorConfig>) -> Result<String>;
-}
-
-pub struct RpcImpl {
+#[derive(Debug)]
+pub struct TodaRpc {
     status: Mutex<anyhow::Result<()>>,
     tx: Mutex<mpsc::Sender<Comm>>,
     hookfs: Option<Arc<HookFs>>,
 }
 
-impl RpcImpl {
+impl TodaRpc {
     pub fn new(
         status: Mutex<anyhow::Result<()>>,
         tx: Mutex<mpsc::Sender<Comm>>,
@@ -55,16 +25,8 @@ impl RpcImpl {
     ) -> Self {
         Self { status, tx, hookfs }
     }
-}
 
-impl Drop for RpcImpl {
-    fn drop(&mut self) {
-        trace!("Dropping jrpc handler");
-    }
-}
-
-impl Rpc for RpcImpl {
-    fn get_status(&self, _inst: String) -> Result<String> {
+    pub fn get_status(&self) -> anyhow::Result<String> {
         info!("rpc get_status called");
         match &*self.status.lock().unwrap() {
             Ok(_) => Ok("ok".to_string()),
@@ -72,17 +34,20 @@ impl Rpc for RpcImpl {
                 let tx = &self.tx.lock().unwrap();
                 tx.send(Comm::Shutdown)
                     .expect("Send through channel failed");
+                tracing::error!("get_status error: {:?}", e);
                 Ok(e.to_string())
             }
         }
     }
-    fn update(&self, config: Vec<InjectorConfig>) -> Result<String> {
+    pub fn update(&self, config: Vec<InjectorConfig>) -> anyhow::Result<String> {
         info!("rpc update called");
         if let Err(e) = &*self.status.lock().unwrap() {
+            tracing::error!("update error: {:?}", e);
             return Ok(e.to_string());
         }
         let injectors = MultiInjector::build(config);
         if let Err(e) = &injectors {
+            tracing::error!("update MultiInjector::build error: {:?}", e);
             return Ok(e.to_string());
         }
         futures::executor::block_on(async {
@@ -93,3 +58,5 @@ impl Rpc for RpcImpl {
         Ok("ok".to_string())
     }
 }
+
+

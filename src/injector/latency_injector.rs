@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::time::delay_for;
+use tokio::time::sleep;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -28,7 +28,7 @@ impl Injector for LatencyInjector {
             debug!("inject io delay {:?}", latency);
 
             select! {
-                _ = delay_for(latency) => {}
+                _ = sleep(latency) => {}
                 _ = token.cancelled() => {
                     debug!("cancelled");
                 }
