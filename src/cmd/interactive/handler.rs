@@ -6,11 +6,12 @@ use std::task::{Context, Poll};
 use anyhow::Error;
 use futures::TryStreamExt;
 use http::{Method, Request, Response, StatusCode};
-use hyper::server::conn::{Connection, Http};
+use hyper::server::conn::{Http};
 use hyper::service::Service;
 use hyper::Body;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+use std::thread::JoinHandle;
+use tokio::runtime::Runtime;
 use tracing::instrument;
 use tokio::net::{UnixListener};
 #[cfg(unix)]
@@ -35,30 +36,35 @@ impl TodaServer {
     pub fn serve_interactive(&mut self) {
         let mut service = TodaService(self.toda_rpc.clone());
 
-        self.task = Some(tokio::spawn(async move {
-            let unix_listener = UnixListener::from_std(unsafe {std::os::unix::net::UnixListener::from_raw_fd(3)}).unwrap();
+        self.task = Some(std::thread::spawn( move || {
+            Runtime::new()
+            .expect("Failed to create Tokio runtime")
+            .block_on(async {
+                let unix_listener = UnixListener::from_std(unsafe {std::os::unix::net::UnixListener::from_raw_fd(3)}).unwrap();
 
-            loop {
-                match (unix_listener).accept().await {
-                    Ok((stream, addr)) => {
-
-                        let http = Http::new();
-                        let conn = http.serve_connection(stream, &mut service);
-                        if let Err(e) = conn.await {
-                            tracing::error!(
-                                "error : http.serve_connection to {:?} failed, error: {:?}",
-                                addr,
-                                e
-                            );
-                            return Err(anyhow::anyhow!("{}",e));
+                loop {
+                    match (unix_listener).accept().await {
+                        Ok((stream, addr)) => {
+    
+                            let http = Http::new();
+                            let conn = http.serve_connection(stream, &mut service);
+                            if let Err(e) = conn.await {
+                                tracing::error!(
+                                    "error : http.serve_connection to {:?} failed, error: {:?}",
+                                    addr,
+                                    e
+                                );
+                                return Err(anyhow::anyhow!("{}",e));
+                            }
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!("error : accept connection failed");
-                        return Err(anyhow::anyhow!("{}", e));
+                        Err(e) => {
+                            tracing::error!("error : accept connection failed");
+                            return Err(anyhow::anyhow!("{}", e));
+                        }
                     }
                 }
             }
+        )
         }));
     }
 }
