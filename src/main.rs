@@ -63,6 +63,9 @@ struct Options {
 
     #[structopt(short = "v", long = "verbose", default_value = "trace")]
     verbose: String,
+
+    #[structopt(short = "u", long = "unix-socket-path", default_value = "/toda.sock")]
+    unix_socket_path: PathBuf,
 }
 
 #[instrument(skip(option))]
@@ -187,7 +190,7 @@ fn main() -> Result<()> {
             Err(_) => None,
         };
         let mut toda_server = TodaServer::new(TodaRpc::new(Mutex::new(status),Mutex::new(tx),hookfs));
-        toda_server.serve_interactive();
+        toda_server.serve_interactive(option.unix_socket_path.clone());
 
     }
     info!("waiting for signal to exit");

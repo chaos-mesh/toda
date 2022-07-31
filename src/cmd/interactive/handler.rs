@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use std::path::PathBuf;
 use anyhow::Error;
 use futures::TryStreamExt;
 use http::{Method, Request, Response, StatusCode};
@@ -15,7 +16,6 @@ use tokio::runtime::Runtime;
 use tracing::instrument;
 use tokio::net::{UnixListener};
 #[cfg(unix)]
-use std::os::unix::io::{FromRawFd};
 use crate::todarpc::TodaRpc;
 use crate::injector::{InjectorConfig};
 
@@ -33,14 +33,14 @@ impl TodaServer {
         }
     }
 
-    pub fn serve_interactive(&mut self) {
+    pub fn serve_interactive(&mut self, unix_socket_path: PathBuf) {
         let mut service = TodaService(self.toda_rpc.clone());
 
         self.task = Some(std::thread::spawn( move || {
             Runtime::new()
             .expect("Failed to create Tokio runtime")
             .block_on(async {
-                let unix_listener = UnixListener::from_std(unsafe {std::os::unix::net::UnixListener::from_raw_fd(3)}).unwrap();
+                let unix_listener = UnixListener::bind(unix_socket_path).unwrap();
 
                 loop {
                     match (unix_listener).accept().await {
