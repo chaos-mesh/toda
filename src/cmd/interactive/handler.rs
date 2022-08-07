@@ -33,14 +33,15 @@ impl TodaServer {
         }
     }
 
-    pub fn serve_interactive(&mut self, unix_socket_path: PathBuf) {
+    pub fn serve_interactive(&mut self, interactive_path: PathBuf) {
         let mut service = TodaService(self.toda_rpc.clone());
 
         self.task = Some(std::thread::spawn( move || {
             Runtime::new()
             .expect("Failed to create Tokio runtime")
             .block_on(async {
-                let unix_listener = UnixListener::bind(unix_socket_path).unwrap();
+                tracing::info!("TodaServer listener try binding {:?}", interactive_path);
+                let unix_listener = UnixListener::bind(interactive_path).unwrap();
 
                 loop {
                     match (unix_listener).accept().await {

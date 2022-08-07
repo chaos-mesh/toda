@@ -145,17 +145,17 @@ static mut SIGNAL_PIPE_WRITER: RawFd = 0;
 
 const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 
-extern "C" fn signal_handler(_: libc::c_int) {
-    unsafe {
-        write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
-    }
-}
+// extern "C" fn signal_handler(_: libc::c_int) {
+//     unsafe {
+//         write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
+//     }
+// }
 
-fn wait_for_signal(chan: RawFd) -> Result<()> {
-    let mut buf = vec![0u8; 6];
-    read(chan, buf.as_mut_slice())?;
-    Ok(())
-}
+// fn wait_for_signal(chan: RawFd) -> Result<()> {
+//     let mut buf = vec![0u8; 6];
+//     read(chan, buf.as_mut_slice())?;
+//     Ok(())
+// }
 
 fn main() -> Result<()> {
     let (reader, writer) = pipe()?;
@@ -194,7 +194,8 @@ fn main() -> Result<()> {
 
     }
     info!("waiting for signal to exit");
-    wait_for_signal(reader)?;
+    let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()], opt.interactive_path.clone().unwrap())?;
+    signals.wait().await?;
     info!("start to recover and exit");
     if let Ok(v) = mount_injector {
         resume(option, v)?;
