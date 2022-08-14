@@ -29,3 +29,4 @@ pub mod ptrace;
 pub mod replacer;
 pub mod stop;
 pub mod utils;
+pub mod signal;

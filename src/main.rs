@@ -34,7 +34,7 @@ mod stop;
 mod utils;
 
 use std::convert::TryFrom;
-use std::os::unix::io::RawFd;
+// use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::{io};
@@ -42,8 +42,9 @@ use std::{io};
 use anyhow::Result;
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
-use nix::sys::signal::{signal, SigHandler, Signal};
-use nix::unistd::{pipe, read, write};
+use tokio::signal::unix::SignalKind;
+// use nix::sys::signal::{signal, SigHandler, Signal};
+// use nix::unistd::{pipe, read, write};
 use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
 use tracing::{info, instrument};
@@ -51,6 +52,7 @@ use tracing_subscriber::EnvFilter;
 use utils::encode_path;
 use crate::cmd::interactive::handler::TodaServer;
 use crate::todarpc::TodaRpc;
+use toda::signal::Signals;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -64,8 +66,8 @@ struct Options {
     #[structopt(short = "v", long = "verbose", default_value = "trace")]
     verbose: String,
 
-    #[structopt(short = "u", long = "unix-socket-path", default_value = "/toda.sock")]
-    unix_socket_path: PathBuf,
+    #[structopt(long = "interactive-path")]
+    interactive_path: Option<PathBuf>,
 }
 
 #[instrument(skip(option))]
@@ -141,9 +143,9 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     Ok(())
 }
 
-static mut SIGNAL_PIPE_WRITER: RawFd = 0;
+// static mut SIGNAL_PIPE_WRITER: RawFd = 0;
 
-const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
+// const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 
 // extern "C" fn signal_handler(_: libc::c_int) {
 //     unsafe {
@@ -156,15 +158,15 @@ const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 //     read(chan, buf.as_mut_slice())?;
 //     Ok(())
 // }
+#[tokio::main]
+async fn main() -> anyhow::Result<()>{
+    // let (reader, writer) = pipe()?;
+    // unsafe {
+    //     SIGNAL_PIPE_WRITER = writer;
+    // }
 
-fn main() -> Result<()> {
-    let (reader, writer) = pipe()?;
-    unsafe {
-        SIGNAL_PIPE_WRITER = writer;
-    }
-
-    unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
-    unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
+    // unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
+    // unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
     let option = Options::from_args();
     let env_filter = EnvFilter::try_from_default_env()
@@ -190,12 +192,13 @@ fn main() -> Result<()> {
             Err(_) => None,
         };
         let mut toda_server = TodaServer::new(TodaRpc::new(Mutex::new(status),Mutex::new(tx),hookfs));
-        toda_server.serve_interactive(option.unix_socket_path.clone());
+        toda_server.serve_interactive(option.interactive_path.clone().unwrap());
 
     }
     info!("waiting for signal to exit");
-    let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()], opt.interactive_path.clone().unwrap())?;
+    let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()], option.interactive_path.clone().unwrap())?;
     signals.wait().await?;
+
     info!("start to recover and exit");
     if let Ok(v) = mount_injector {
         resume(option, v)?;

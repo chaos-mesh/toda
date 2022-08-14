@@ -23,7 +23,7 @@ impl Signals {
     pub async fn wait(&mut self) -> anyhow::Result<()> {
         select_all(self.signals.iter_mut().map(|sig| Box::pin(sig.recv()))).await;
         if self.interactive_path != PathBuf::new() {
-            std::fs::remove_file(self.interactive_path.clone()).unwrap();
+            std::fs::remove_file(self.interactive_path.clone())?;
         }
         Ok(())
     }
