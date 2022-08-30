@@ -38,6 +38,7 @@ use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::{io};
+use std::process::exit;
 
 use anyhow::Result;
 use injector::InjectorConfig;
@@ -186,22 +187,26 @@ async fn main() -> anyhow::Result<()>{
     };
 
     let (tx, _) = mpsc::channel();
-    {
+    if option.interactive_path.is_some() {
         let hookfs = match &mount_injector {
             Ok(e) => Some(e.hookfs.clone()),
             Err(_) => None,
         };
         let mut toda_server = TodaServer::new(TodaRpc::new(Mutex::new(status),Mutex::new(tx),hookfs));
         toda_server.serve_interactive(option.interactive_path.clone().unwrap());
-
-    }
-    info!("waiting for signal to exit");
-    let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()], option.interactive_path.clone().unwrap())?;
-    signals.wait().await?;
-
-    info!("start to recover and exit");
-    if let Ok(v) = mount_injector {
-        resume(option, v)?;
+    
+        info!("waiting for signal to exit");
+        let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()])?;
+        signals.wait().await?;
+        
+        // delete the unix socket file
+        std::fs::remove_file(option.interactive_path.clone().unwrap())?;
+    
+        info!("start to recover and exit");
+        if let Ok(v) = mount_injector {
+            resume(option, v)?;
+        }
+        exit(0);
     }
     Ok(())
 }

@@ -34,8 +34,8 @@ impl TodaServer {
     }
 
     pub fn serve_interactive(&mut self, interactive_path: PathBuf) {
-        let mut service = TodaService(self.toda_rpc.clone());
 
+        let toda_rpc = self.toda_rpc.clone();
         self.task = Some(std::thread::spawn( move || {
             Runtime::new()
             .expect("Failed to create Tokio runtime")
@@ -44,25 +44,26 @@ impl TodaServer {
                 let unix_listener = UnixListener::bind(interactive_path).unwrap();
 
                 loop {
+                    let mut service = TodaService(toda_rpc.clone());
                     match (unix_listener).accept().await {
                         Ok((stream, addr)) => {
-    
-                            let http = Http::new();
-                            let conn = http.serve_connection(stream, &mut service);
-                            if let Err(e) = conn.await {
-                                tracing::error!(
-                                    "error : http.serve_connection to {:?} failed, error: {:?}",
-                                    addr,
-                                    e
-                                );
-                                return Err(anyhow::anyhow!("{}",e));
-                            }
+                            tokio::task::spawn(async move {
+                                let http = Http::new();
+                                let conn = http.serve_connection(stream, &mut service);
+                                if let Err(e) = conn.await {
+                                    tracing::error!(
+                                        "error : http.serve_connection to {:?} failed, error: {:?}",
+                                        addr,
+                                        e
+                                    );
+                                }
+                            });
                         }
                         Err(e) => {
-                            tracing::error!("error : accept connection failed");
+                            tracing::error!("error: accept connection failed");
                             return Err(anyhow::anyhow!("{}", e));
                         }
-                    }
+                    }        
                 }
             }
         )
@@ -117,7 +118,7 @@ impl TodaService {
                     }
                     Ok(c) => c,
                 };
-                match toda_rpc.update(config) {
+                match toda_rpc.update(config).await {
                     Ok(res) => {
                         *response.body_mut() = res.into();
                     }
@@ -153,4 +154,3 @@ impl Service<Request<Body>> for TodaService {
         Box::pin(async move { Self::handle(&mut *handler.lock().await, request).await })
     }
 }
-

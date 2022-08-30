@@ -39,7 +39,7 @@ impl TodaRpc {
             }
         }
     }
-    pub fn update(&self, config: Vec<InjectorConfig>) -> anyhow::Result<String> {
+    pub async fn update(&self, config: Vec<InjectorConfig>) -> anyhow::Result<String> {
         info!("rpc update called");
         if let Err(e) = &*self.status.lock().unwrap() {
             tracing::error!("update error: {:?}", e);
@@ -58,5 +58,3 @@ impl TodaRpc {
         Ok("ok".to_string())
     }
 }
-
-
