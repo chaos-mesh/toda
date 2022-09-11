@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::thread::JoinHandle;
 
 use anyhow::Error;
 use futures::TryStreamExt;
@@ -12,7 +11,8 @@ use hyper::server::conn::Http;
 use hyper::service::Service;
 use hyper::Body;
 use tokio::net::UnixListener;
-use tokio::runtime::Runtime;
+// use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use crate::injector::InjectorConfig;
@@ -35,36 +35,36 @@ impl TodaServer {
 
     pub fn serve_interactive(&mut self, interactive_path: PathBuf) {
         let toda_rpc = self.toda_rpc.clone();
-        self.task = Some(std::thread::spawn(move || {
-            Runtime::new()
-                .expect("Failed to create Tokio runtime")
-                .block_on(async {
-                    tracing::info!("TodaServer listener try binding {:?}", interactive_path);
-                    let unix_listener = UnixListener::bind(interactive_path).unwrap();
+        self.task = Some(tokio::task::spawn(async move {
+            // Runtime::new()
+            //     .expect("Failed to create Tokio runtime")
+            //     .block_on(async {
+            tracing::info!("TodaServer listener try binding {:?}", interactive_path);
+            let unix_listener = UnixListener::bind(interactive_path).unwrap();
 
-                    loop {
-                        let mut service = TodaService(toda_rpc.clone());
-                        match (unix_listener).accept().await {
-                            Ok((stream, addr)) => {
-                                tokio::task::spawn(async move {
-                                    let http = Http::new();
-                                    let conn = http.serve_connection(stream, &mut service);
-                                    if let Err(e) = conn.await {
-                                        tracing::error!(
-                                        "error : http.serve_connection to {:?} failed, error: {:?}",
-                                        addr,
-                                        e
-                                    );
-                                    }
-                                });
+            loop {
+                let mut service = TodaService(toda_rpc.clone());
+                match (unix_listener).accept().await {
+                    Ok((stream, addr)) => {
+                        tokio::task::spawn(async move {
+                            let http = Http::new();
+                            let conn = http.serve_connection(stream, &mut service);
+                            if let Err(e) = conn.await {
+                                tracing::error!(
+                                    "error : http.serve_connection to {:?} failed, error: {:?}",
+                                    addr,
+                                    e
+                                );
                             }
-                            Err(e) => {
-                                tracing::error!("error: accept connection failed");
-                                return Err(anyhow::anyhow!("{}", e));
-                            }
-                        }
+                        });
                     }
-                })
+                    Err(e) => {
+                        tracing::error!("error: accept connection failed");
+                        return Err(anyhow::anyhow!("{}", e));
+                    }
+                }
+            }
+            // })
         }));
     }
 }
