@@ -21,39 +21,37 @@
 
 extern crate derive_more;
 
+mod cmd;
 mod fuse_device;
 mod hookfs;
 mod injector;
-mod cmd;
-mod todarpc;
 mod mount;
 mod mount_injector;
 mod ptrace;
 mod replacer;
 mod stop;
+mod todarpc;
 mod utils;
 
 use std::convert::TryFrom;
-// use std::os::unix::io::RawFd;
+use std::io;
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex};
-use std::{io};
 use std::process::exit;
+use std::sync::{mpsc, Mutex};
 
 use anyhow::Result;
 use injector::InjectorConfig;
 use mount_injector::{MountInjectionGuard, MountInjector};
-use tokio::signal::unix::SignalKind;
-// use nix::sys::signal::{signal, SigHandler, Signal};
-// use nix::unistd::{pipe, read, write};
 use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
+use toda::signal::Signals;
+use tokio::signal::unix::SignalKind;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 use utils::encode_path;
+
 use crate::cmd::interactive::handler::TodaServer;
 use crate::todarpc::TodaRpc;
-use toda::signal::Signals;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -144,31 +142,8 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     Ok(())
 }
 
-// static mut SIGNAL_PIPE_WRITER: RawFd = 0;
-
-// const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
-
-// extern "C" fn signal_handler(_: libc::c_int) {
-//     unsafe {
-//         write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
-//     }
-// }
-
-// fn wait_for_signal(chan: RawFd) -> Result<()> {
-//     let mut buf = vec![0u8; 6];
-//     read(chan, buf.as_mut_slice())?;
-//     Ok(())
-// }
 #[tokio::main]
-async fn main() -> anyhow::Result<()>{
-    // let (reader, writer) = pipe()?;
-    // unsafe {
-    //     SIGNAL_PIPE_WRITER = writer;
-    // }
-
-    // unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
-    // unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
-
+async fn main() -> anyhow::Result<()> {
     let option = Options::from_args();
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_from(&option.verbose))
@@ -192,16 +167,17 @@ async fn main() -> anyhow::Result<()>{
             Ok(e) => Some(e.hookfs.clone()),
             Err(_) => None,
         };
-        let mut toda_server = TodaServer::new(TodaRpc::new(Mutex::new(status),Mutex::new(tx),hookfs));
+        let mut toda_server =
+            TodaServer::new(TodaRpc::new(Mutex::new(status), Mutex::new(tx), hookfs));
         toda_server.serve_interactive(option.interactive_path.clone().unwrap());
-    
+
         info!("waiting for signal to exit");
         let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()])?;
-        signals.wait().await?;
-        
+        signals.wait().await;
+
         // delete the unix socket file
         std::fs::remove_file(option.interactive_path.clone().unwrap())?;
-    
+
         info!("start to recover and exit");
         if let Ok(v) = mount_injector {
             resume(option, v)?;

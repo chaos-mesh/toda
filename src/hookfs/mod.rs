@@ -324,7 +324,7 @@ impl HookFs {
 
         // TODO: create a standalone runtime only for interrupt is too ugly.
         //       this RWLock is actually redundant, and the injector is rarely written.
-        let mut rt  = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let injector = self.injector.read().await;
             injector.interrupt();

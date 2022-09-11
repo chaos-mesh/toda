@@ -1,6 +1,6 @@
 use std::sync::{mpsc, Arc, Mutex};
 
-use tracing::{info};
+use tracing::info;
 
 use crate::hookfs::HookFs;
 use crate::injector::{InjectorConfig, MultiInjector};

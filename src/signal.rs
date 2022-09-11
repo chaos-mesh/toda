@@ -14,8 +14,7 @@ impl Signals {
         Ok(Signals(signals))
     }
 
-    pub async fn wait(&mut self) -> anyhow::Result<()> {
+    pub async fn wait(&mut self) {
         select_all(self.0.iter_mut().map(|sig| Box::pin(sig.recv()))).await;
-        Ok(())
     }
 }

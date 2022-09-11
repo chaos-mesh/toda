@@ -1,112 +1,106 @@
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::thread::JoinHandle;
 
-use std::path::PathBuf;
 use anyhow::Error;
 use futures::TryStreamExt;
 use http::{Method, Request, Response, StatusCode};
-use hyper::server::conn::{Http};
+use hyper::server::conn::Http;
 use hyper::service::Service;
 use hyper::Body;
-use tokio::sync::Mutex;
-use std::thread::JoinHandle;
+use tokio::net::UnixListener;
 use tokio::runtime::Runtime;
 use tracing::instrument;
-use tokio::net::{UnixListener};
+
+use crate::injector::InjectorConfig;
 #[cfg(unix)]
 use crate::todarpc::TodaRpc;
-use crate::injector::{InjectorConfig};
 
 #[derive(Debug)]
 pub struct TodaServer {
-    toda_rpc: Arc<Mutex<TodaRpc>>,
+    toda_rpc: Arc<TodaRpc>,
     task: Option<JoinHandle<Result<(), Error>>>,
 }
 
 impl TodaServer {
     pub fn new(toda_rpc: TodaRpc) -> Self {
         Self {
-            toda_rpc: Arc::new(Mutex::new(toda_rpc)),
+            toda_rpc: Arc::new(toda_rpc),
             task: None,
         }
     }
 
     pub fn serve_interactive(&mut self, interactive_path: PathBuf) {
-
         let toda_rpc = self.toda_rpc.clone();
-        self.task = Some(std::thread::spawn( move || {
+        self.task = Some(std::thread::spawn(move || {
             Runtime::new()
-            .expect("Failed to create Tokio runtime")
-            .block_on(async {
-                tracing::info!("TodaServer listener try binding {:?}", interactive_path);
-                let unix_listener = UnixListener::bind(interactive_path).unwrap();
+                .expect("Failed to create Tokio runtime")
+                .block_on(async {
+                    tracing::info!("TodaServer listener try binding {:?}", interactive_path);
+                    let unix_listener = UnixListener::bind(interactive_path).unwrap();
 
-                loop {
-                    let mut service = TodaService(toda_rpc.clone());
-                    match (unix_listener).accept().await {
-                        Ok((stream, addr)) => {
-                            tokio::task::spawn(async move {
-                                let http = Http::new();
-                                let conn = http.serve_connection(stream, &mut service);
-                                if let Err(e) = conn.await {
-                                    tracing::error!(
+                    loop {
+                        let mut service = TodaService(toda_rpc.clone());
+                        match (unix_listener).accept().await {
+                            Ok((stream, addr)) => {
+                                tokio::task::spawn(async move {
+                                    let http = Http::new();
+                                    let conn = http.serve_connection(stream, &mut service);
+                                    if let Err(e) = conn.await {
+                                        tracing::error!(
                                         "error : http.serve_connection to {:?} failed, error: {:?}",
                                         addr,
                                         e
                                     );
-                                }
-                            });
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("error: accept connection failed");
+                                return Err(anyhow::anyhow!("{}", e));
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!("error: accept connection failed");
-                            return Err(anyhow::anyhow!("{}", e));
-                        }
-                    }        
-                }
-            }
-        )
+                    }
+                })
         }));
     }
 }
 
-pub struct TodaService(Arc<Mutex<TodaRpc>>);
+pub struct TodaService(Arc<TodaRpc>);
 
 impl TodaService {
-
     async fn read_config(request: Request<Body>) -> anyhow::Result<Vec<InjectorConfig>> {
         let request_data: Vec<u8> = request
-        .into_body()
-        .try_fold(vec![], |mut data, seg| {
-            data.extend(seg);
-            futures::future::ok(data)
-        })
-        .await?;
+            .into_body()
+            .try_fold(vec![], |mut data, seg| {
+                data.extend(seg);
+                futures::future::ok(data)
+            })
+            .await?;
         let raw_config: Vec<InjectorConfig> = serde_json::from_slice(&request_data)?;
 
         Ok(raw_config)
     }
 
     #[instrument]
-    async fn handle(toda_rpc: &mut TodaRpc, request: Request<Body>) -> anyhow::Result<Response<Body>> {
-
+    async fn handle(toda_rpc: &TodaRpc, request: Request<Body>) -> anyhow::Result<Response<Body>> {
         let mut response = Response::new(Body::empty());
         if request.method() != Method::PUT {
             *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
             return Ok(response);
         }
         *response.status_mut() = StatusCode::OK;
-        
+
         match request.uri().path() {
-            "/get_status" => {
-                match toda_rpc.get_status() {
-                    Err(err) => {
-                        *response.body_mut() = err.to_string().into();
-                    } 
-                    Ok(res) => {
-                        *response.body_mut() = res.into();
-                    }
+            "/get_status" => match toda_rpc.get_status() {
+                Err(err) => {
+                    *response.body_mut() = err.to_string().into();
+                }
+                Ok(res) => {
+                    *response.body_mut() = res.into();
                 }
             },
             "/update" => {
@@ -124,16 +118,15 @@ impl TodaService {
                     }
                     Err(err) => {
                         *response.body_mut() = err.to_string().into();
-                    } 
+                    }
                 }
-            },
+            }
             _ => {
                 *response.status_mut() = StatusCode::NOT_FOUND;
-            },
+            }
         };
 
-        return Ok(response)
-
+        Ok(response)
     }
 }
 
@@ -151,6 +144,6 @@ impl Service<Request<Body>> for TodaService {
     #[inline]
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let handler = self.0.clone();
-        Box::pin(async move { Self::handle(&mut *handler.lock().await, request).await })
+        Box::pin(async move { Self::handle(&handler, request).await })
     }
 }
