@@ -162,26 +162,26 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (tx, _) = mpsc::channel();
-    if option.interactive_path.is_some() {
+    if let Some(path) = option.interactive_path.clone() {
         let hookfs = match &mount_injector {
             Ok(e) => Some(e.hookfs.clone()),
             Err(_) => None,
         };
         let mut toda_server =
             TodaServer::new(TodaRpc::new(Mutex::new(status), Mutex::new(tx), hookfs));
-        toda_server.serve_interactive(option.interactive_path.clone().unwrap());
+        toda_server.serve_interactive(path.clone());
 
         info!("waiting for signal to exit");
         let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()])?;
         signals.wait().await;
 
-        // delete the unix socket file
-        std::fs::remove_file(option.interactive_path.clone().unwrap())?;
-
         info!("start to recover and exit");
         if let Ok(v) = mount_injector {
             resume(option, v)?;
         }
+
+        // delete the unix socket file
+        std::fs::remove_file(path.clone())?;
         exit(0);
     }
     Ok(())

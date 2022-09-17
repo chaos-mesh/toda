@@ -11,7 +11,6 @@ use hyper::server::conn::Http;
 use hyper::service::Service;
 use hyper::Body;
 use tokio::net::UnixListener;
-// use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use tracing::instrument;
 
@@ -36,9 +35,6 @@ impl TodaServer {
     pub fn serve_interactive(&mut self, interactive_path: PathBuf) {
         let toda_rpc = self.toda_rpc.clone();
         self.task = Some(tokio::task::spawn(async move {
-            // Runtime::new()
-            //     .expect("Failed to create Tokio runtime")
-            //     .block_on(async {
             tracing::info!("TodaServer listener try binding {:?}", interactive_path);
             let unix_listener = UnixListener::bind(interactive_path).unwrap();
 
@@ -64,7 +60,6 @@ impl TodaServer {
                     }
                 }
             }
-            // })
         }));
     }
 }

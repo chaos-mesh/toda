@@ -319,16 +319,13 @@ impl HookFs {
         self.enable_injection.store(true, Ordering::SeqCst);
     }
 
-    pub fn disable_injection(&self) {
+    pub async fn disable_injection(&self) {
         self.enable_injection.store(false, Ordering::SeqCst);
 
         // TODO: create a standalone runtime only for interrupt is too ugly.
         //       this RWLock is actually redundant, and the injector is rarely written.
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
             let injector = self.injector.read().await;
             injector.interrupt();
-        });
     }
 
     pub fn rebuild_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
