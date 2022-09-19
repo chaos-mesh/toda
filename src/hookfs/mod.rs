@@ -321,9 +321,6 @@ impl HookFs {
 
     pub async fn disable_injection(&self) {
         self.enable_injection.store(false, Ordering::SeqCst);
-
-        // TODO: create a standalone runtime only for interrupt is too ugly.
-        //       this RWLock is actually redundant, and the injector is rarely written.
             let injector = self.injector.read().await;
             injector.interrupt();
     }
