@@ -105,9 +105,11 @@ impl ProcessAccessor {
         let mut new_paths = Vec::new();
         self.new_paths.read_to_end(&mut new_paths)?;
 
-        let (cases_ptr, length, _) = self.cases.clone().into_raw_parts();
+        let cases = &mut *self.cases.clone();
+        let length = cases.len();
+        let cases_ptr = &mut cases[0] as *mut ReplaceCase as *mut u8;
         let size = length * std::mem::size_of::<ReplaceCase>();
-        let cases = unsafe { std::slice::from_raw_parts(cases_ptr as *mut u8, size) };
+        let cases = unsafe { std::slice::from_raw_parts(cases_ptr, size) };
 
         self.process.run_codes(|addr| {
             let mut vec_rt =

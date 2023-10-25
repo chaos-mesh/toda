@@ -4,7 +4,7 @@ mod reply;
 pub mod runtime;
 mod utils;
 
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
@@ -159,12 +159,12 @@ pub struct HookFs {
 struct Node {
     pub ref_count: u64,
     // TODO: optimize paths with a combination data structure
-    paths: LinkedList<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 impl Node {
     fn get_path(&self) -> Option<&Path> {
-        self.paths.back().map(|item| item.as_path())
+        self.paths.last().map(|item| item.as_path())
     }
 
     fn insert(&mut self, path: PathBuf) {
@@ -174,11 +174,11 @@ impl Node {
             }
         }
 
-        self.paths.push_back(path);
+        self.paths.push(path);
     }
 
     fn remove(&mut self, path: &Path) {
-        self.paths.drain_filter(|x| x == path);
+        self.paths.retain(|x| x != path);
     }
 }
 

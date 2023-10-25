@@ -12,7 +12,7 @@ ENV https_proxy $HTTPS_PROXY
 
 RUN apt-get update && apt-get install build-essential curl git pkg-config libfuse-dev fuse -y && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly-2021-12-23 -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
 ENV PATH "/root/.cargo/bin:${PATH}"
 
 RUN if [ -n "$HTTP_PROXY" ]; then echo "[http]\n\
@@ -24,7 +24,6 @@ COPY . /toda-build
 
 WORKDIR /toda-build
 
-ENV RUSTFLAGS "-Z relro-level=full"
 RUN --mount=type=cache,target=/toda-build/target \
     --mount=type=cache,target=/root/.cargo/registry \
     cargo build --release
