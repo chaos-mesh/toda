@@ -155,9 +155,8 @@ impl ProcessAccessor {
         self.new_paths.read_to_end(&mut new_paths)?;
 
         let cases = &mut *self.cases.clone();
-        let length = cases.len();
         let cases_ptr = &mut cases[0] as *mut RawReplaceCase as *mut u8;
-        let size = length * std::mem::size_of::<RawReplaceCase>();
+        let size = std::mem::size_of_val(cases);
         let cases = unsafe { std::slice::from_raw_parts(cases_ptr, size) };
 
         self.process.run_codes(|addr| {
@@ -315,7 +314,7 @@ impl MmapReplacer {
                     })
                     .filter(|(_, case)| case.path.starts_with(detect_path))
                     .filter_map(|(process, mut case)| {
-                        let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
+                        let stripped_path = case.path.strip_prefix(detect_path).ok()?;
                         case.path = new_path.join(stripped_path);
                         Some((process, case))
                     })

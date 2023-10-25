@@ -21,7 +21,7 @@ impl MountsInfo {
     pub fn non_root<P: AsRef<Path>>(&self, path: P) -> Result<bool> {
         let mount_points = self.mounts.iter().map(|item| &item.mount_point);
         for mount_point in mount_points {
-            if path.as_ref().starts_with(&mount_point) {
+            if path.as_ref().starts_with(mount_point) {
                 // The relationship is "contain" because if we want to inject /a/b, and /a is a mount point, we can still
                 // use this method.
                 return Ok(true);
