@@ -36,15 +36,8 @@ impl HookFsError {
 }
 
 impl From<nix::Error> for HookFsError {
-    fn from(err: Error) -> HookFsError {
-        // TODO: match more error types
-        match err {
-            Error::Sys(errno) => HookFsError::Sys(errno),
-            _ => {
-                error!("unknown error {:?}", err);
-                HookFsError::UnknownError
-            }
-        }
+    fn from(errno: Error) -> HookFsError {
+        HookFsError::Sys(errno)
     }
 }
 

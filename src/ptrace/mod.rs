@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
+use std::io::IoSlice;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -8,17 +9,15 @@ use anyhow::{anyhow, Result};
 use nix::errno::Errno;
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::signal::Signal;
-use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
+use nix::sys::uio::{process_vm_writev, RemoteIoVec};
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
-use nix::Error::Sys;
 use procfs::process::Task;
 use procfs::ProcError;
 use retry::delay::Fixed;
 use retry::Error::{self, Operation};
 use retry::OperationResult;
 use tracing::{error, info, instrument, trace, warn};
-use Error::Internal;
 
 // There should be only one PtraceManager in one thread. But as we don't implement TLS
 // , we cannot use thread-local variables safely.
@@ -47,15 +46,11 @@ fn attach_task(task: &Task) -> Result<()> {
 
     trace!("attach task: {}", task.tid);
     match ptrace::attach(pid) {
-        Err(Sys(errno))
+        Err(errno)
             if errno == Errno::ESRCH
                 || (errno == Errno::EPERM && thread_is_gone(process.stat.state)) =>
         {
             info!("task {} doesn't exist, maybe has stopped", task.tid)
-        }
-        Err(err) => {
-            warn!("attach error: {:?}", err);
-            return Err(err.into());
         }
         _ => {}
     }
@@ -145,7 +140,7 @@ impl PtraceManager {
                                                 Ok(()) => {
                                                     info!("successfully detached task: {}", task.tid);
                                                 }
-                                                Err(Sys(Errno::ESRCH)) => trace!(
+                                                Err(Errno::ESRCH) => trace!(
                                                     "task {} doesn't exist, maybe has stopped or not traced",
                                                     task.tid
                                                 ),
@@ -168,7 +163,7 @@ impl PtraceManager {
                                 total_delay: _,
                                 tries: _,
                             } => return Err(e),
-                            Internal(err) => error!("internal error: {:?}", err),
+                            Error::Internal(err) => error!("internal error: {:?}", err),
                         }
                     };
                 }
@@ -325,7 +320,7 @@ impl TracedProcess {
 
         process_vm_writev(
             pid,
-            &[IoVec::from_slice(content)],
+            &[IoSlice::new(content)],
             &[RemoteIoVec {
                 base: addr as usize,
                 len: content.len(),
@@ -366,12 +361,11 @@ impl TracedProcess {
                     let status = wait::waitpid(pid, None)?;
                     info!("wait status: {:?}", status);
 
-                    use nix::sys::signal::SIGTRAP;
                     let regs = ptrace::getregs(pid)?;
 
                     info!("current registers: {:?}", regs);
                     match status {
-                        wait::WaitStatus::Stopped(_, SIGTRAP) => {
+                        wait::WaitStatus::Stopped(_, Signal::SIGTRAP) => {
                             break;
                         }
                         _ => info!("continue running replacers"),
