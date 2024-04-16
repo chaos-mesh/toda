@@ -188,6 +188,7 @@ impl ProcessAccessor {
                 ; mov rdi, QWORD [r14+r15] // addr
                 ; mov rsi, QWORD [r14+r15+8] // length
                 ; mov rdx, 0x0
+                ; push rdi
                 ; syscall
                 // open
                 ; mov rax, 0x2
@@ -200,6 +201,7 @@ impl ProcessAccessor {
                 ; mov rsi, libc::O_RDWR
                 ; mov rdx, 0x0
                 ; syscall
+                ; pop rdi // addr
                 ; push rax
                 ; mov r8, rax // fd
                 // mmap
