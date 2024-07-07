@@ -23,7 +23,7 @@ jobs:
     - name: Add user_allow_other to /etc/fuse.conf
       run: echo "user_allow_other" | sudo tee -a /etc/fuse.conf
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose -- --test-threads=1
   clippy_check:
     runs-on: ubuntu-latest
     steps:
