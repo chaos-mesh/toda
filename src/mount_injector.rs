@@ -35,7 +35,7 @@ impl MountInjectionGuard {
         self.hookfs.disable_injection();
     }
 
-    pub fn recover_mount(mut self) -> Result<()> {
+    pub fn recover_mount(&mut self) -> Result<()> {
         let mount_point = self.original_path.clone();
 
         retry(Fixed::from_millis(500).take(20), || {
@@ -55,7 +55,7 @@ impl MountInjectionGuard {
             .unwrap()?;
 
         let new_path = self.new_path.clone();
-        let original_path = self.original_path;
+        let original_path = self.original_path.clone();
 
         let mounts = mount::MountsInfo::parse_mounts()?;
 
@@ -130,7 +130,12 @@ impl MountInjector {
 
             std::fs::create_dir_all(new_path.as_path())?;
 
-            let args = ["allow_other", "fsname=toda", "default_permissions", "nonempty"];
+            let args = [
+                "allow_other",
+                "fsname=toda",
+                "default_permissions",
+                "nonempty",
+            ];
             let flags: Vec<_> = args
                 .iter()
                 .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
