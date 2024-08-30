@@ -130,7 +130,12 @@ impl MountInjector {
 
             std::fs::create_dir_all(new_path.as_path())?;
 
-            let args = ["allow_other", "fsname=toda", "default_permissions", "nonempty"];
+            let args = [
+                "allow_other",
+                "fsname=toda",
+                "default_permissions",
+                "nonempty",
+            ];
             let flags: Vec<_> = args
                 .iter()
                 .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
