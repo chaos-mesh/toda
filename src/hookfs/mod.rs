@@ -4,7 +4,7 @@ mod reply;
 pub mod runtime;
 mod utils;
 
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::RawFd;
@@ -159,12 +159,12 @@ pub struct HookFs {
 struct Node {
     pub ref_count: u64,
     // TODO: optimize paths with a combination data structure
-    paths: LinkedList<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 impl Node {
     fn get_path(&self) -> Option<&Path> {
-        self.paths.back().map(|item| item.as_path())
+        self.paths.last().map(|item| item.as_path())
     }
 
     fn insert(&mut self, path: PathBuf) {
@@ -174,11 +174,11 @@ impl Node {
             }
         }
 
-        self.paths.push_back(path);
+        self.paths.push(path);
     }
 
     fn remove(&mut self, path: &Path) {
-        self.paths.drain_filter(|x| x == path);
+        self.paths.retain(|x| x != path);
     }
 }
 
@@ -728,7 +728,7 @@ impl AsyncFileSystemImpl for HookFs {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!libc::O_APPEND) & (!libc::O_DIRECT);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
 
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?;
@@ -849,7 +849,7 @@ impl AsyncFileSystemImpl for HookFs {
         let inode_map = self.inode_map.read().await;
         let path = { inode_map.get_path(ino)?.to_owned() };
         let filtered_flags = flags & (!libc::O_APPEND);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
 
         let path_clone = path.clone();
         let dir = spawn_blocking(move || {
@@ -889,7 +889,7 @@ impl AsyncFileSystemImpl for HookFs {
             trace!("empty reply");
             return Ok(());
         }
-        for (index, entry) in all_entries.iter().enumerate().skip(offset as usize) {
+        for (index, entry) in all_entries.iter().enumerate().skip(offset) {
             let entry = (*entry)?;
 
             let name = entry.file_name();
@@ -990,9 +990,6 @@ impl AsyncFileSystemImpl for HookFs {
         let cpath = CString::new(path.as_os_str().as_bytes())?;
         let name = CString::new(name.as_bytes())?;
 
-        let mut buf = Vec::new();
-        buf.resize(size as usize, 0u8);
-
         let data = async_getxattr(cpath, name, size as usize).await?;
 
         let mut reply = if size == 0 {
@@ -1016,8 +1013,7 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?.to_owned();
         let cpath = CString::new(path.as_os_str().as_bytes())?;
 
-        let mut buf = Vec::new();
-        buf.resize(size as usize, 0u8);
+        let buf = vec![0u8; size as usize];
 
         let shared_buf = std::sync::Arc::new(buf);
         let buf_clone = shared_buf.clone();
@@ -1073,7 +1069,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?.to_owned();
-        let mask = AccessFlags::from_bits_truncate(mask as i32);
+        let mask = AccessFlags::from_bits_truncate(mask);
         let path_clone = path.to_path_buf();
 
         spawn_blocking(move || nix::unistd::access(&path_clone, mask)).await??;
@@ -1102,7 +1098,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
 
         let filtered_flags = flags & (!libc::O_APPEND);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
         let mode = stat::Mode::from_bits_truncate(mode);
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
@@ -1180,14 +1176,13 @@ async fn async_setxattr(path: CString, name: CString, data: Vec<u8>, flags: i32)
 
 async fn async_getxattr(path: CString, name: CString, size: usize) -> Result<Vec<u8>> {
     spawn_blocking(move || {
-        let mut buf = Vec::new();
-        buf.resize(size, 0);
+        let mut buf = vec![0; size];
 
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
         let buf_ptr = buf.as_slice() as *const [u8] as *mut [u8] as *mut libc::c_void;
 
-        let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
+        let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size) };
         if ret == -1 {
             Err(Error::last())
         } else {
@@ -1200,8 +1195,7 @@ async fn async_getxattr(path: CString, name: CString, size: usize) -> Result<Vec
 
 async fn async_read(fd: RawFd, count: usize, offset: i64) -> Result<Vec<u8>> {
     spawn_blocking(move || unsafe {
-        let mut buf = Vec::new();
-        buf.resize(count, 0);
+        let mut buf = vec![0; count];
         let ret = libc::pread(fd, buf.as_ptr() as *mut c_void, count, offset);
         if ret == -1 {
             Err(Error::last())

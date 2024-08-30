@@ -25,16 +25,16 @@ impl MultiInjector {
         for injector in conf.into_iter() {
             let injector = match injector {
                 InjectorConfig::Fault(faults) => {
-                    (box FaultInjector::build(faults)?) as Box<dyn Injector>
+                    (Box::new(FaultInjector::build(faults)?)) as Box<dyn Injector>
                 }
                 InjectorConfig::Latency(latency) => {
-                    (box LatencyInjector::build(latency)?) as Box<dyn Injector>
+                    (Box::new(LatencyInjector::build(latency)?)) as Box<dyn Injector>
                 }
                 InjectorConfig::AttrOverride(attr_override) => {
-                    (box AttrOverrideInjector::build(attr_override)?) as Box<dyn Injector>
+                    (Box::new(AttrOverrideInjector::build(attr_override)?)) as Box<dyn Injector>
                 }
                 InjectorConfig::Mistake(mistakes) => {
-                    (box MistakeInjector::build(mistakes)?) as Box<dyn Injector>
+                    (Box::new(MistakeInjector::build(mistakes)?)) as Box<dyn Injector>
                 }
             };
             injectors.push(injector)

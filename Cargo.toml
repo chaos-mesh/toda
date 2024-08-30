@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 structopt = "0.3"
-nix = "0.18"
+nix = {version = "0.27.1", features = ["dir", "fs", "mman", "mount", "process", "ptrace", "signal", "uio", "user"]}
 anyhow = "1.0"
 fuser = {version = "0.6", features = ["abi-7-19"]}
 time = "0.1"

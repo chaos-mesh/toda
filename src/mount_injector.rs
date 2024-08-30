@@ -125,7 +125,7 @@ impl MountInjector {
         let cloned_hookfs = hookfs.clone();
 
         let (before_mount_waiter, before_mount_guard) = stop::lock();
-        let handler = std::thread::spawn(box move || {
+        let handler = std::thread::spawn(Box::new(move || {
             let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
             std::fs::create_dir_all(new_path.as_path())?;
@@ -144,7 +144,7 @@ impl MountInjector {
             drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 
             Ok(())
-        });
+        }));
         // TODO: remove this. But wait for FUSE gets up
         // Related Issue: https://github.com/zargony/fuse-rs/issues/9
         before_mount_waiter.wait();
