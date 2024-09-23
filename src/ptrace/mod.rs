@@ -49,7 +49,7 @@ fn attach_task(task: &Task) -> Result<()> {
     match ptrace::attach(pid) {
         Err(Sys(errno))
             if errno == Errno::ESRCH
-                || (errno == Errno::EPERM && thread_is_gone(process.stat.state)) =>
+                || (errno == Errno::EPERM && thread_is_gone(process.stat()?.state)) =>
         {
             info!("task {} doesn't exist, maybe has stopped", task.tid)
         }
