@@ -11,19 +11,177 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: kernel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            kernel: '6.8'
+            baseline: success
+          - os: ubuntu-24.04
+            kernel: '6.17'
+            baseline: eio
     steps:
     - uses: actions/checkout@v2
+      with:
+        ref: abc1f39a798b7fc12a37da121568fe8a82c0d9d1
+        fetch-depth: 0
+    - name: Record kernel and source
+      env:
+        EXPECTED_KERNEL: ${{ matrix.kernel }}
+      run: |
+        uname -a | tee "$RUNNER_TEMP/kernel.log"
+        git rev-parse HEAD | tee "$RUNNER_TEMP/source.log"
+        test "$(uname -r | cut -d. -f1,2)" = "$EXPECTED_KERNEL"
     - name: Install FUSE
-      run: sudo apt install fuse libfuse-dev pkg-config -y
-    - name: Build
-      run: cargo build --verbose
-    - name: Grant Permission on /tmp
-      run: sudo chmod -R 777 /tmp
-    - name: Add user_allow_other to /etc/fuse.conf
-      run: echo "user_allow_other" | sudo tee -a /etc/fuse.conf
-    - name: Run tests
-      run: cargo test --verbose -- --test-threads=1
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y fuse libfuse-dev pkg-config
+        echo user_allow_other | sudo tee -a /etc/fuse.conf
+    - name: Build fixed code
+      run: |
+        rustc --version
+        cargo --version
+        cargo build --locked --verbose
+    - name: Run full fixed suite
+      run: cargo test --locked --verbose --no-fail-fast -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/fixed-tests.log"
+    - name: Verify mounted IO and delay lifecycle
+      run: |
+        sudo env "RUNNER_TEMP=$RUNNER_TEMP" python3 - "$PWD/target/debug/toda" after <<'PYTHON' 2>&1 | tee "$RUNNER_TEMP/runtime-probe.log"
+        import json
+        import os
+        from pathlib import Path
+        import select
+        import subprocess
+        import sys
+        import time
+
+        binary, label = sys.argv[1:]
+        mount_path = Path('/tmp') / ('toda-probe-' + label)
+        mount_path.mkdir()
+        subprocess.run(['mount', '--make-rprivate', '/'], check=True)
+        subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', str(mount_path)], check=True)
+        log_path = Path(os.environ['RUNNER_TEMP']) / (label + '-runtime-stderr.log')
+        with log_path.open('w') as log:
+            proc = subprocess.Popen([binary, '--path', str(mount_path), '--mount-only', '--verbose', 'debug'],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+            buffer = b''
+            def rpc(request_id, method, params):
+                global buffer
+                request = dict(jsonrpc='2.0', id=request_id, method=method, params=params)
+                proc.stdin.write((json.dumps(request) + '\n').encode())
+                proc.stdin.flush()
+                deadline = time.monotonic() + 30
+                while b'\n' not in buffer:
+                    assert proc.poll() is None, 'toda exited during RPC'
+                    assert time.monotonic() < deadline, 'RPC timed out'
+                    if select.select([proc.stdout], [], [], 0.1)[0]:
+                        data = os.read(proc.stdout.fileno(), 65536)
+                        assert data, 'RPC stdout closed'
+                        buffer += data
+                line, buffer = buffer.split(b'\n', 1)
+                response = json.loads(line)
+                print(json.dumps(response), flush=True)
+                assert response == dict(jsonrpc='2.0', result='ok', id=request_id), response
+
+            def exclusive_round_trip(name):
+                path = mount_path / name
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    assert os.write(fd, b'hello world') == 11
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    assert os.read(fd, 11) == b'hello world'
+                finally:
+                    os.close(fd)
+                try:
+                    duplicate = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    os.close(duplicate)
+                    raise AssertionError('exclusive create overwrote an existing file')
+
+            try:
+                for _ in range(300):
+                    mounts = Path('/proc/mounts').read_text().splitlines()
+                    mounted = [line for line in mounts if line.split()[1:3] == [str(mount_path), 'fuse']]
+                    if mounted:
+                        break
+                    assert proc.poll() is None, log_path.read_text()
+                    time.sleep(0.1)
+                assert mounted, 'FUSE mount was not established'
+                print(os.uname().release, flush=True)
+                print(mounted[0], flush=True)
+                rpc(1, 'get_status', ['ping'])
+                plain = mount_path / 'ordinary'
+                plain.write_text('ordinary create')
+                assert plain.read_text() == 'ordinary create'
+                print('ordinary_create=PASS', flush=True)
+                exclusive_round_trip('exclusive')
+                print('exclusive_create=PASS; read_write=PASS; existing_file=EEXIST', flush=True)
+                config = [{'type': 'latency', 'path': str(mount_path / '*'), 'methods': ['WRITE'], 'percent': 100, 'latency': '200ms'}]
+                rpc(2, 'update', [config])
+                started = time.monotonic()
+                exclusive_round_trip('delayed')
+                assert time.monotonic() - started >= 0.2, 'configured write delay was not applied'
+                print('write_delay_200ms=PASS', flush=True)
+                rpc(3, 'update', [[]])
+                exclusive_round_trip('paused')
+                print('pause_and_io=PASS', flush=True)
+                rpc(4, 'update', [config])
+                started = time.monotonic()
+                exclusive_round_trip('resumed')
+                assert time.monotonic() - started >= 0.2, 'write delay was not restored'
+                print('resume_and_write_delay=PASS', flush=True)
+                rpc(5, 'update', [[]])
+                exclusive_round_trip('recovered')
+                print('recovery_and_io=PASS', flush=True)
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                subprocess.run(['umount', '-l', str(mount_path)], check=False)
+            assert log_path.read_text().count('inject io delay 200ms') == 2, 'unexpected write delay injection count'
+            print('delay_disabled_during_pause_and_recovery=PASS', flush=True)
+        PYTHON
+
+    - name: Check pre-fix control with the same regression test
+      env:
+        EXPECTED_BASELINE: ${{ matrix.baseline }}
+      run: |
+        git worktree add --detach "$RUNNER_TEMP/toda-baseline" 523c67dbd5bd3fb2758b7194679a3cab2e7be917
+        cp tests/posix_test.rs "$RUNNER_TEMP/toda-baseline/tests/posix_test.rs"
+        cd "$RUNNER_TEMP/toda-baseline"
+        git rev-parse HEAD | tee "$RUNNER_TEMP/baseline-source.log"
+        set +e
+        cargo test --locked --target-dir "$RUNNER_TEMP/baseline-target" --test posix_test create_new_file -- --exact --test-threads=1 2>&1 | tee "$RUNNER_TEMP/baseline-test.log"
+        status=${PIPESTATUS[0]}
+        set -e
+        if [ "$EXPECTED_BASELINE" = success ]; then
+          test "$status" -eq 0
+          grep -F 'test create_new_file ... ok' "$RUNNER_TEMP/baseline-test.log"
+          echo 'baseline_exclusive_create=PASS'
+        else
+          test "$status" -eq 101
+          grep -F 'test create_new_file ... FAILED' "$RUNNER_TEMP/baseline-test.log"
+          grep -E 'code: 5,.*Input/output error' "$RUNNER_TEMP/baseline-test.log"
+          echo 'baseline_exclusive_create=EIO_REPRODUCED'
+        fi
+    - name: Upload verification logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-verification-${{ matrix.os }}
+        path: ${{ runner.temp }}/*.log
   clippy_check:
     runs-on: ubuntu-latest
     steps:
