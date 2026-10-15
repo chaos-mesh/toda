@@ -99,6 +99,36 @@ fn file_basic() {
 }
 
 #[test]
+fn create_new_file() {
+    let (test_path, _session) = init("create_new_file");
+
+    let content = "hello world";
+    let target_file = test_path.join("target_file");
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&target_file)
+        .unwrap();
+    file.write_all(content.as_bytes()).unwrap();
+    drop(file);
+
+    let mut file = File::open(&target_file).unwrap();
+    let mut read_output = vec![0; content.len()];
+    file.read_exact(&mut read_output).unwrap();
+    assert_eq!(read_output, content.as_bytes());
+
+    let error = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&target_file)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+}
+
+#[test]
 fn truncate_file() {
     let (test_path, _) = init("truncate_file");
 
