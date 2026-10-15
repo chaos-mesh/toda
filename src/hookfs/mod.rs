@@ -1118,7 +1118,7 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("return with stat: {:?} fh: {}", stat, fh);
         inode_map.insert_path(stat.ino, path.clone());
         inode_map.increase_ref(stat.ino);
-        let mut reply = Create::new(stat, 0, fh as u64, flags);
+        let mut reply = Create::new(stat, 0, fh as u64, 0);
         inject_reply!(self, CREATE, path.as_path(), reply, Create);
         Ok(reply)
     }
