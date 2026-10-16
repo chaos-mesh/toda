@@ -21,35 +21,37 @@
 
 extern crate derive_more;
 
+mod cmd;
 mod fuse_device;
 mod hookfs;
 mod injector;
-mod jsonrpc;
 mod mount;
 mod mount_injector;
 mod ptrace;
 mod replacer;
 mod stop;
+mod todarpc;
 mod utils;
 
 use std::convert::TryFrom;
-use std::os::unix::io::RawFd;
+use std::io;
 use std::path::PathBuf;
+use std::process::exit;
 use std::sync::{mpsc, Mutex};
-use std::{io, thread};
 
 use anyhow::Result;
 use injector::InjectorConfig;
-use jsonrpc::start_server;
 use mount_injector::{MountInjectionGuard, MountInjector};
-use nix::sys::signal::{signal, SigHandler, Signal};
-use nix::unistd::{pipe, read, write};
 use replacer::{Replacer, UnionReplacer};
 use structopt::StructOpt;
-use tokio::runtime::Runtime;
+use toda::signal::Signals;
+use tokio::signal::unix::SignalKind;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 use utils::encode_path;
+
+use crate::cmd::interactive::handler::TodaServer;
+use crate::todarpc::TodaRpc;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "basic")]
@@ -62,6 +64,9 @@ struct Options {
 
     #[structopt(short = "v", long = "verbose", default_value = "trace")]
     verbose: String,
+
+    #[structopt(long = "interactive-path")]
+    interactive_path: Option<PathBuf>,
 }
 
 #[instrument(skip(option))]
@@ -137,31 +142,8 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     Ok(())
 }
 
-static mut SIGNAL_PIPE_WRITER: RawFd = 0;
-
-const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
-
-extern "C" fn signal_handler(_: libc::c_int) {
-    unsafe {
-        write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
-    }
-}
-
-fn wait_for_signal(chan: RawFd) -> Result<()> {
-    let mut buf = vec![0u8; 6];
-    read(chan, buf.as_mut_slice())?;
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    let (reader, writer) = pipe()?;
-    unsafe {
-        SIGNAL_PIPE_WRITER = writer;
-    }
-
-    unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
-    unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
-
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let option = Options::from_args();
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_from(&option.verbose))
@@ -180,26 +162,27 @@ fn main() -> Result<()> {
     };
 
     let (tx, _) = mpsc::channel();
-    {
+    if let Some(path) = option.interactive_path.clone() {
         let hookfs = match &mount_injector {
             Ok(e) => Some(e.hookfs.clone()),
             Err(_) => None,
         };
-        thread::spawn(|| {
-            Runtime::new()
-                .expect("Failed to create Tokio runtime")
-                .block_on(start_server(jsonrpc::RpcImpl::new(
-                    Mutex::new(status),
-                    Mutex::new(tx),
-                    hookfs,
-                )));
-        });
-    }
-    info!("waiting for signal to exit");
-    wait_for_signal(reader)?;
-    info!("start to recover and exit");
-    if let Ok(v) = mount_injector {
-        resume(option, v)?;
+        let mut toda_server =
+            TodaServer::new(TodaRpc::new(Mutex::new(status), Mutex::new(tx), hookfs));
+        toda_server.serve_interactive(path.clone());
+
+        info!("waiting for signal to exit");
+        let mut signals = Signals::from_kinds(&[SignalKind::interrupt(), SignalKind::terminate()])?;
+        signals.wait().await;
+
+        info!("start to recover and exit");
+        if let Ok(v) = mount_injector {
+            resume(option, v)?;
+        }
+
+        // delete the unix socket file
+        std::fs::remove_file(path.clone())?;
+        exit(0);
     }
     Ok(())
 }
