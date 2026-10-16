@@ -16,7 +16,7 @@
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex};
+use std::sync::Mutex;
 use std::{io, thread};
 
 use anyhow::Result;
@@ -161,7 +161,6 @@ fn main() -> Result<()> {
         Err(e) => Err(anyhow::Error::msg(e.to_string())),
     };
 
-    let (tx, _) = mpsc::channel();
     {
         let hookfs = match &mount_injector {
             Ok(e) => Some(e.hookfs.clone()),
@@ -172,7 +171,6 @@ fn main() -> Result<()> {
                 .expect("Failed to create Tokio runtime")
                 .block_on(start_server(jsonrpc::RpcImpl::new(
                     Mutex::new(status),
-                    Mutex::new(tx),
                     hookfs,
                 )));
         });

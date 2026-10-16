@@ -1,4 +1,4 @@
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 use jsonrpc_derive::rpc;
 use jsonrpc_stdio_server::jsonrpc_core::*;
@@ -7,11 +7,6 @@ use tracing::{info, trace};
 
 use crate::hookfs::HookFs;
 use crate::injector::{InjectorConfig, MultiInjector};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Comm {
-    Shutdown = 0,
-}
 
 pub async fn start_server(config: RpcImpl) {
     info!("Starting jsonrpc server");
@@ -43,17 +38,12 @@ pub trait Rpc {
 
 pub struct RpcImpl {
     status: Mutex<anyhow::Result<()>>,
-    tx: Mutex<mpsc::Sender<Comm>>,
     hookfs: Option<Arc<HookFs>>,
 }
 
 impl RpcImpl {
-    pub fn new(
-        status: Mutex<anyhow::Result<()>>,
-        tx: Mutex<mpsc::Sender<Comm>>,
-        hookfs: Option<Arc<HookFs>>,
-    ) -> Self {
-        Self { status, tx, hookfs }
+    pub fn new(status: Mutex<anyhow::Result<()>>, hookfs: Option<Arc<HookFs>>) -> Self {
+        Self { status, hookfs }
     }
 }
 
@@ -68,12 +58,7 @@ impl Rpc for RpcImpl {
         info!("rpc get_status called");
         match &*self.status.lock().unwrap() {
             Ok(_) => Ok("ok".to_string()),
-            Err(e) => {
-                let tx = &self.tx.lock().unwrap();
-                tx.send(Comm::Shutdown)
-                    .expect("Send through channel failed");
-                Ok(e.to_string())
-            }
+            Err(e) => Ok(e.to_string()),
         }
     }
     fn update(&self, config: Vec<InjectorConfig>) -> Result<String> {
