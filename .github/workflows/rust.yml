@@ -24,6 +24,9 @@ jobs:
         run: mountpoint -q /sys/fs/fuse/connections || sudo mount -t fusectl fusectl /sys/fs/fuse/connections
       - name: Run tests
         run: cargo test --locked --verbose -- --test-threads=1
+      - name: Test mount failure rollback
+        timeout-minutes: 2
+        run: sudo -E "$(command -v cargo)" test --locked --test mount_injector_test -- --ignored --test-threads=1
   static_checks:
     runs-on: ubuntu-latest
     steps:

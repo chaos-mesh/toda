@@ -105,6 +105,7 @@ impl MountInjector {
 
     // This method should be called in host namespace
     pub fn mount(&mut self) -> Result<MountInjectionGuard> {
+        let injectors = MultiInjector::build(self.injector_config.clone())?;
         let original_path = self.original_path.clone();
         let new_path = self.new_path.clone();
 
@@ -117,8 +118,6 @@ impl MountInjector {
             return Err(anyhow!("inject on a root mount"));
         }
 
-        let injectors = MultiInjector::build(self.injector_config.clone())?;
-
         let hookfs = Arc::new(hookfs::HookFs::new(
             &self.original_path,
             &self.new_path,
@@ -126,8 +125,6 @@ impl MountInjector {
         ));
 
         let fs = hookfs::AsyncFileSystem::from(hookfs.clone());
-
-        std::fs::create_dir_all(self.new_path.as_path())?;
 
         let mut config = fuser::Config::default();
         config.acl = fuser::SessionACL::All;
@@ -138,7 +135,23 @@ impl MountInjector {
 
         info!("mount with config {:?}", config);
 
-        let mut session = fuser::Session::new(fs, &self.original_path, &config)?;
+        let mut session = match fuser::Session::new(fs, &self.original_path, &config) {
+            Ok(session) => session,
+            Err(error) => {
+                if let Err(rollback_error) = mounts.move_mount(&self.new_path, &self.original_path)
+                {
+                    let message = format!(
+                        "FUSE mount failed: {}; failed to restore mount from {} to {}: {:#}",
+                        error,
+                        self.new_path.display(),
+                        self.original_path.display(),
+                        rollback_error
+                    );
+                    return Err(anyhow!(error).context(message));
+                }
+                return Err(error.into());
+            }
+        };
         let unmounter = session.unmount_callable();
         let handler = std::thread::spawn(move || {
             session.run()?;
