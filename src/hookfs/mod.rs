@@ -418,6 +418,28 @@ impl AsyncFileSystemImpl for HookFs {
             let path = file.original_path().to_owned();
             let fd = nix::unistd::dup(unsafe { BorrowedFd::borrow_raw(file.fd) })?;
             drop(opened_files);
+            let paths = {
+                let inode_map = self.inode_map.read().await;
+                inode_map
+                    .get(&ino)
+                    .map(|node| node.paths.clone())
+                    .unwrap_or_default()
+            };
+            let (fd, path) = spawn_blocking(move || -> Result<_> {
+                let descriptor_stat = stat::fstat(&fd)?;
+                let path = paths
+                    .into_iter()
+                    .rev()
+                    .find(|path| {
+                        stat::lstat(path).is_ok_and(|candidate_stat| {
+                            candidate_stat.st_dev == descriptor_stat.st_dev
+                                && candidate_stat.st_ino == descriptor_stat.st_ino
+                        })
+                    })
+                    .unwrap_or(path);
+                Ok((fd, path))
+            })
+            .await??;
             inject!(self, GETATTR, &path);
             let stat = spawn_blocking(move || stat::fstat(&fd)).await??;
             (convert_libc_stat_to_fuse_stat(stat)?, path)
@@ -1459,6 +1481,132 @@ mod tests {
             assert_eq!(attr.perm, 0o400);
         }
         fs.release(ino, file.fh, 0, None, false).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_renamed_open_file_filters_by_current_visible_path() {
+        let (directory, fs) = getattr_test_fs("rename-filter");
+        std::fs::write(directory.join("old"), b"contents").unwrap();
+        let original = fs.lookup(1, "old".into()).await.unwrap().stat;
+        let handle = fs.open(original.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "old".into(), 1, "new".into(), 0)
+            .await
+            .unwrap();
+        fs.enable_injection();
+
+        for (name, matches) in [("new", true), ("old", false)] {
+            let visible_path = directory.with_extension("visible").join(name);
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "fault", "path": visible_path, "methods": ["GETATTR"],
+                    "percent": 100, "faults": [{"errno": libc::EIO, "weight": 1}]
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let result = fs.getattr(original.ino.0, fh).await;
+                if matches {
+                    assert!(matches!(result, Err(Error::Sys(Errno::EIO))));
+                } else {
+                    let attr = result.unwrap().attr;
+                    assert_eq!(attr.ino, original.ino);
+                    assert_eq!(attr.size, original.size);
+                    assert_eq!(attr.perm, original.perm);
+                    assert_eq!(attr.nlink, 1);
+                }
+            }
+
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "attrOverride", "path": visible_path,
+                    "percent": 100, "size": 123, "perm": 0o400
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let attr = fs.getattr(original.ino.0, fh).await.unwrap().attr;
+                assert_eq!(attr.ino, original.ino);
+                assert_eq!(attr.nlink, 1);
+                assert_eq!(attr.size, if matches { 123 } else { original.size });
+                assert_eq!(attr.perm, if matches { 0o400 } else { original.perm });
+            }
+
+            *fs.injector.write().await = MultiInjector::build(Vec::new()).unwrap();
+            for fh in [Some(handle), None] {
+                let attr = fs.getattr(original.ino.0, fh).await.unwrap().attr;
+                assert_eq!(attr.ino, original.ino);
+                assert_eq!(attr.size, original.size);
+                assert_eq!(attr.perm, original.perm);
+                assert_eq!(attr.nlink, 1);
+            }
+        }
+        assert_eq!(std::fs::read(directory.join("new")).unwrap(), b"contents");
+        fs.release(original.ino.0, handle, 0, None, false)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_rename_overwrite_filters_by_remaining_hard_link() {
+        let (directory, fs) = getattr_test_fs("rename-hard-link");
+        std::fs::write(directory.join("source"), b"replacement").unwrap();
+        std::fs::write(directory.join("destination"), b"old").unwrap();
+        std::fs::hard_link(directory.join("destination"), directory.join("alias")).unwrap();
+        let alias = fs.lookup(1, "alias".into()).await.unwrap().stat;
+        let destination = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_eq!(alias.ino, destination.ino);
+        assert_eq!(destination.nlink, 2);
+        let handle = fs.open(destination.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "source".into(), 1, "destination".into(), 0)
+            .await
+            .unwrap();
+        let replacement = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_ne!(replacement.ino, destination.ino);
+        assert_eq!(replacement.size, 11);
+
+        for fh in [Some(handle), None] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 1);
+        }
+        fs.enable_injection();
+        for (name, matches) in [("alias", true), ("destination", false)] {
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "fault", "path": directory.with_extension("visible").join(name),
+                    "methods": ["GETATTR"], "percent": 100,
+                    "faults": [{"errno": libc::EIO, "weight": 1}]
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let result = fs.getattr(destination.ino.0, fh).await;
+                if matches {
+                    assert!(matches!(result, Err(Error::Sys(Errno::EIO))));
+                } else {
+                    let attr = result.unwrap().attr;
+                    assert_eq!(attr.ino, destination.ino);
+                    assert_eq!(attr.size, 3);
+                    assert_eq!(attr.nlink, 1);
+                }
+            }
+        }
+        *fs.injector.write().await = MultiInjector::build(Vec::new()).unwrap();
+        for fh in [Some(handle), None] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 1);
+        }
+        fs.release(destination.ino.0, handle, 0, None, false)
+            .await
+            .unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -34,7 +34,7 @@ use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "basic")]
+#[command(name = "toda", version)]
 struct Options {
     #[arg(long)]
     path: PathBuf,
