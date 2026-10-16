@@ -9,7 +9,7 @@ toda moves the target mount to a sibling path and mounts a FUSE filesystem at th
 ## Requirements
 
 - Linux on x86-64. The process replacement code uses Linux `/proc`, `ptrace`, and x86-64 instructions.
-- FUSE support, access to `/dev/fuse`, and the FUSE userspace library.
+- FUSE support, access to `/dev/fuse`, and FUSE mount tools such as `fusermount3`.
 - Permission to move and mount filesystems and, unless `--mount-only` is set, trace the target processes.
 - The target processes' PID and mount namespaces. Enter those namespaces before starting toda. toda does not enter namespaces itself.
 
@@ -17,17 +17,17 @@ Use an existing mount point as the target. An ordinary directory that is not a m
 
 ## Build
 
-The repository pins Rust to `nightly-2021-12-23` in [rust-toolchain](rust-toolchain). Keep this toolchain when building the current source.
+The repository pins stable Rust to `1.99.1` in [rust-toolchain](rust-toolchain). Keep this toolchain when building the current source.
 
 On a Linux x86-64 system with Rust installed through rustup, install the native dependencies and build:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libfuse-dev fuse
-cargo build --release
+sudo apt-get install -y build-essential fuse3
+cargo build --locked --release
 ```
 
-The binary is `target/release/toda`. [.cargo/config.toml](.cargo/config.toml) sets `-Z relro-level=full` so shared-library symbols are resolved at startup, before toda changes mounts.
+The binary is `target/release/toda`. [.cargo/config.toml](.cargo/config.toml) sets `-C relro-level=full` so shared-library symbols are resolved at startup, before toda changes mounts.
 
 To build with Docker and copy the binary to `./toda`, run:
 
@@ -35,7 +35,9 @@ To build with Docker and copy the binary to `./toda`, run:
 make release
 ```
 
-This target builds the `chaos-mesh/toda` image using the [Dockerfile](Dockerfile), then copies `/toda` out of the image. `make image` builds the image without copying the binary. Run these builds on Linux x86-64. The Make targets do not select a cross-compilation platform.
+This target builds the `chaos-mesh/toda` image using the [Dockerfile](Dockerfile), then copies `/toda` out of the image. `make image` builds the image without copying the binary. The Make targets explicitly build and run Linux x86-64 containers. Docker on another architecture needs support for running those containers. The image uses Debian 12 and Rust 1.99.1.
+
+The Docker-built binary requires glibc 2.34 or newer. To run on a system with an older glibc, build natively on that system with the pinned toolchain.
 
 ## Run and configure injection
 
@@ -107,7 +109,7 @@ Send `SIGINT` with Ctrl+C, or send `SIGTERM`, to start recovery. toda interrupts
 On Linux with the build dependencies installed, run the JSON-RPC handler tests without mounting FUSE:
 
 ```sh
-cargo test --test jsonrpc_test
+cargo test --locked --test jsonrpc_test
 ```
 
 The POSIX tests mount FUSE with `allow_other` and delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. Run them in a disposable Linux environment. For a non-root test user, enable `user_allow_other` in `/etc/fuse.conf` and ensure that the user can access `/dev/fuse`.
@@ -115,10 +117,10 @@ The POSIX tests mount FUSE with `allow_other` and delete and recreate directorie
 Run the full suite serially, as CI does:
 
 ```sh
-cargo test --verbose -- --test-threads=1
+cargo test --locked --verbose -- --test-threads=1
 ```
 
-The POSIX tests cover filesystem operations. They do not cover the full CLI injection and recovery flow.
+The POSIX tests cover filesystem operations. Four cases for the deleted-file descriptor limitation are marked ignored. They can be run with `cargo test --locked --test posix_test -- --ignored --test-threads=1`. The suite does not cover the full CLI injection and recovery flow.
 
 `make example` builds and starts a privileged Docker container that repeatedly reads and writes files through a volume at `/var/run/test`. It is a workload for manual testing. It does not start toda or configure injection automatically.
 

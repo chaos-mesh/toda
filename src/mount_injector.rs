@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -125,21 +124,22 @@ impl MountInjector {
         let cloned_hookfs = hookfs.clone();
 
         let (before_mount_waiter, before_mount_guard) = stop::lock();
-        let handler = std::thread::spawn(box move || {
+        let handler = std::thread::spawn(move || {
             let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
 
             std::fs::create_dir_all(new_path.as_path())?;
 
-            let args = ["allow_other", "fsname=toda", "default_permissions", "nonempty"];
-            let flags: Vec<_> = args
-                .iter()
-                .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
-                .collect();
+            let mut config = fuser::Config::default();
+            config.acl = fuser::SessionACL::All;
+            config.mount_options = vec![
+                fuser::MountOption::FSName("toda".to_owned()),
+                fuser::MountOption::DefaultPermissions,
+            ];
 
-            info!("mount with flags {:?}", flags);
+            info!("mount with config {:?}", config);
 
             drop(before_mount_guard);
-            fuser::mount(fs, &original_path, &flags)?;
+            fuser::mount(fs, &original_path, &config)?;
 
             drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 

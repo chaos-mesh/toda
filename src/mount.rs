@@ -13,7 +13,7 @@ pub struct MountsInfo {
 impl MountsInfo {
     pub fn parse_mounts() -> Result<Self> {
         let process = Process::myself()?;
-        let mounts = process.mountinfo()?;
+        let mounts = process.mountinfo()?.0;
 
         Ok(MountsInfo { mounts })
     }

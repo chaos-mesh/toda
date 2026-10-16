@@ -11,15 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
-#![feature(async_closure)]
-#![feature(vec_into_raw_parts)]
-#![feature(atomic_mut_ptr)]
-#![feature(drain_filter)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
-
-extern crate derive_more;
 
 mod fuse_device;
 mod hookfs;
@@ -32,35 +25,34 @@ mod replacer;
 mod stop;
 mod utils;
 
-use std::convert::TryFrom;
-use std::os::unix::io::RawFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::{io, thread};
 
 use anyhow::Result;
+use clap::Parser;
 use injector::InjectorConfig;
 use jsonrpc::start_server;
 use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
 use replacer::{Replacer, UnionReplacer};
-use structopt::StructOpt;
 use tokio::runtime::Runtime;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
 use utils::encode_path;
 
-#[derive(StructOpt, Debug, Clone)]
-#[structopt(name = "basic")]
+#[derive(Parser, Debug, Clone)]
+#[command(name = "basic")]
 struct Options {
-    #[structopt(long)]
+    #[arg(long)]
     path: PathBuf,
 
-    #[structopt(long = "mount-only")]
+    #[arg(long = "mount-only")]
     mount_only: bool,
 
-    #[structopt(short = "v", long = "verbose", default_value = "trace")]
+    #[arg(short = 'v', long = "verbose", default_value = "trace")]
     verbose: String,
 }
 
@@ -143,11 +135,11 @@ const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 
 extern "C" fn signal_handler(_: libc::c_int) {
     unsafe {
-        write(SIGNAL_PIPE_WRITER, &SIGNAL_MSG).unwrap();
+        write(BorrowedFd::borrow_raw(SIGNAL_PIPE_WRITER), &SIGNAL_MSG).unwrap();
     }
 }
 
-fn wait_for_signal(chan: RawFd) -> Result<()> {
+fn wait_for_signal(chan: &impl AsFd) -> Result<()> {
     let mut buf = vec![0u8; 6];
     read(chan, buf.as_mut_slice())?;
     Ok(())
@@ -156,15 +148,15 @@ fn wait_for_signal(chan: RawFd) -> Result<()> {
 fn main() -> Result<()> {
     let (reader, writer) = pipe()?;
     unsafe {
-        SIGNAL_PIPE_WRITER = writer;
+        SIGNAL_PIPE_WRITER = writer.as_raw_fd();
     }
 
     unsafe { signal(Signal::SIGINT, SigHandler::Handler(signal_handler))? };
     unsafe { signal(Signal::SIGTERM, SigHandler::Handler(signal_handler))? };
 
-    let option = Options::from_args();
+    let option = Options::parse();
     let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_from(&option.verbose))
+        .or_else(|_| EnvFilter::try_new(&option.verbose))
         .or_else(|_| EnvFilter::try_new("trace"))
         .unwrap();
     tracing_subscriber::fmt()
@@ -196,7 +188,7 @@ fn main() -> Result<()> {
         });
     }
     info!("waiting for signal to exit");
-    wait_for_signal(reader)?;
+    wait_for_signal(&reader)?;
     info!("start to recover and exit");
     if let Ok(v) = mount_injector {
         resume(option, v)?;

@@ -4,7 +4,7 @@ use std::time::Duration;
 use fuser::*;
 use tracing::{debug, error, trace};
 
-use super::errors::Result;
+use super::errors::{HookFsError, Result};
 
 const TTL: Duration = Duration::from_secs(0);
 
@@ -35,10 +35,10 @@ impl Entry {
 #[derive(Debug)]
 pub struct Open {
     pub fh: u64,
-    pub flags: i32,
+    pub flags: FopenFlags,
 }
 impl Open {
-    pub fn new(fh: u64, flags: i32) -> Self {
+    pub fn new(fh: u64, flags: FopenFlags) -> Self {
         Self { fh, flags }
     }
 }
@@ -113,10 +113,10 @@ pub struct Create {
     pub attr: FileAttr,
     pub generation: u64,
     pub fh: u64,
-    pub flags: i32,
+    pub flags: FopenFlags,
 }
 impl Create {
-    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: i32) -> Self {
+    pub fn new(attr: FileAttr, generation: u64, fh: u64, flags: FopenFlags) -> Self {
         Self {
             attr,
             generation,
@@ -161,7 +161,7 @@ impl Xattr {
 
 pub trait FsReply<T: Debug>: Sized {
     fn reply_ok(self, item: T);
-    fn reply_err(self, err: libc::c_int);
+    fn reply_err(self, err: fuser::Errno);
 
     fn reply(self, result: Result<T>) {
         match result {
@@ -172,11 +172,7 @@ pub trait FsReply<T: Debug>: Sized {
             Err(err) => {
                 debug!("err. reply with {}", err);
 
-                let err = err.into();
-                if err == -1 {
-                    error!("returned -1");
-                }
-                self.reply_err(err)
+                self.reply_err(fuse_errno(err))
             }
         }
     }
@@ -184,18 +180,18 @@ pub trait FsReply<T: Debug>: Sized {
 
 impl FsReply<Entry> for ReplyEntry {
     fn reply_ok(self, item: Entry) {
-        self.entry(&TTL, &item.stat, item.generation);
+        self.entry(&TTL, &item.stat, Generation(item.generation));
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
 
 impl FsReply<Open> for ReplyOpen {
     fn reply_ok(self, item: Open) {
-        self.opened(item.fh, item.flags as u32);
+        self.opened(FileHandle(item.fh), item.flags);
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -204,7 +200,7 @@ impl FsReply<Attr> for ReplyAttr {
     fn reply_ok(self, item: Attr) {
         self.attr(&TTL, &item.attr);
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -213,7 +209,7 @@ impl FsReply<Data> for ReplyData {
     fn reply_ok(self, item: Data) {
         self.data(item.data.as_slice());
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -231,7 +227,7 @@ impl FsReply<StatFs> for ReplyStatfs {
             item.frsize,
         )
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -240,7 +236,7 @@ impl FsReply<Write> for ReplyWrite {
     fn reply_ok(self, item: Write) {
         self.written(item.size);
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -250,12 +246,12 @@ impl FsReply<Create> for ReplyCreate {
         self.created(
             &TTL,
             &item.attr,
-            item.generation,
-            item.fh,
-            item.flags as u32,
+            Generation(item.generation),
+            FileHandle(item.fh),
+            item.flags,
         );
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -264,7 +260,7 @@ impl FsReply<Lock> for ReplyLock {
     fn reply_ok(self, item: Lock) {
         self.locked(item.start, item.end, item.typ, item.pid);
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -277,7 +273,7 @@ impl FsReply<Xattr> for ReplyXattr {
             Size { size } => self.size(size),
         }
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
     }
 }
@@ -286,7 +282,39 @@ impl FsReply<()> for ReplyEmpty {
     fn reply_ok(self, _: ()) {
         self.ok();
     }
-    fn reply_err(self, err: libc::c_int) {
+    fn reply_err(self, err: fuser::Errno) {
         self.error(err);
+    }
+}
+
+pub(super) fn fuse_errno(err: HookFsError) -> fuser::Errno {
+    let errno = libc::c_int::from(err);
+    if errno <= 0 {
+        error!(errno, "invalid FUSE errno; replying with EIO");
+    }
+    fuser::Errno::from_i32(errno)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fuse_errno;
+    use crate::hookfs::errors::HookFsError;
+    use nix::errno::Errno;
+
+    #[test]
+    fn replies_preserve_valid_errors_and_normalize_unknown_errno() {
+        assert_eq!(fuse_errno(HookFsError::Sys(Errno::EIO)).code(), libc::EIO);
+        assert_eq!(
+            fuse_errno(HookFsError::Sys(Errno::ENOENT)).code(),
+            libc::ENOENT
+        );
+        assert_eq!(
+            fuse_errno(HookFsError::InodeNotFound { inode: 9 }).code(),
+            libc::EFAULT
+        );
+        assert_eq!(
+            fuse_errno(HookFsError::Sys(Errno::UnknownErrno)).code(),
+            libc::EIO
+        );
     }
 }

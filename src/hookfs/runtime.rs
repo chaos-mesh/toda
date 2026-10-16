@@ -1,17 +1,15 @@
 use std::future::Future;
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
-use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use tracing::trace;
 
-pub static RUNTIME: Lazy<RwLock<Option<Runtime>>> = Lazy::new(|| {
+pub static RUNTIME: LazyLock<RwLock<Option<Runtime>>> = LazyLock::new(|| {
     trace!("build tokio runtime");
 
     RwLock::new(Some(
-        tokio::runtime::Builder::new()
-            .threaded_scheduler()
+        tokio::runtime::Builder::new_multi_thread()
             .thread_name("toda")
             .enable_all()
             .build()

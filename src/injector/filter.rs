@@ -4,12 +4,13 @@ use std::path::Path;
 use anyhow::{anyhow, Error, Result};
 use bitflags::bitflags;
 use glob::{MatchOptions, Pattern};
-use rand::Rng;
+use rand::RngExt;
 use tracing::{info, trace};
 
 use super::injector_config::FilterConfig;
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Method: u32 {
         const LOOKUP = 1;
         const FORGET = 1<<1;
@@ -108,14 +109,13 @@ impl Filter {
             })
             .unwrap_or(Method::all());
 
-        let path_filter = conf
-            .path.and_then(|path| -> Option<Pattern> {
-                if !path.is_empty() {
-                    Pattern::new(&path).ok()
-                } else {
-                    None
-                }
-            });
+        let path_filter = conf.path.and_then(|path| -> Option<Pattern> {
+            if !path.is_empty() {
+                Pattern::new(&path).ok()
+            } else {
+                None
+            }
+        });
         Ok(Self {
             path_filter,
             methods,
@@ -124,8 +124,8 @@ impl Filter {
     }
 
     pub fn filter(&self, method: &Method, path: &Path) -> bool {
-        let mut rng = rand::thread_rng();
-        let p: f64 = rng.gen();
+        let mut rng = rand::rng();
+        let p: f64 = rng.random();
 
         let match_path = match &self.path_filter {
             Some(filter) => filter.matches_path_with(

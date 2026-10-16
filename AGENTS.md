@@ -6,7 +6,7 @@ These instructions apply to the whole repository. Use them to choose which files
 
 1. Read the user request and inspect `git status --short` and the existing diff. Preserve changes that are outside your task.
 2. Read [README.md](README.md) for the public CLI and configuration workflow. Use the task map below to find the relevant implementation and tests.
-3. Check the host platform and installed Rust toolchain before running Cargo or runtime tests. This project targets Linux x86-64 and pins `nightly-2021-12-23`.
+3. Check the host platform and installed Rust toolchain before running Cargo or runtime tests. This project targets Linux x86-64 and pins `1.99.1`.
 4. Make the smallest change that satisfies the request. Choose verification from the table below. If a required environment is unavailable, complete the work you can verify and report the missing checks.
 
 ## Project and execution model
@@ -38,9 +38,9 @@ Start with the row that matches the requested change. Read callers and related t
 
 ## Follow these editing rules
 
-- Keep `nightly-2021-12-23` and the committed `Cargo.lock` unless the task includes a toolchain or dependency change. The crate roots use historical nightly features. Do not switch to current stable Rust to work around a build failure.
-- Preserve `-Z relro-level=full` in `.cargo/config.toml` and the Docker build. It resolves shared-library symbols before mount changes.
-- Follow `rustfmt.toml`. Its import grouping uses nightly rustfmt options. Avoid unrelated formatting churn.
+- Keep `1.99.1` and the committed `Cargo.lock` unless the task includes a toolchain or dependency change. The project uses stable Rust. Do not introduce nightly feature gates to work around a dependency mismatch.
+- Preserve `-C relro-level=full` in `.cargo/config.toml` and the Docker build. It resolves shared-library symbols before mount changes.
+- Follow the stable rustfmt settings in `rustfmt.toml`. Avoid unrelated formatting churn.
 - `src/main.rs` declares its own modules rather than importing the library crate. When adding or removing a shared top-level module, update both crate roots as needed.
 - Keep FUSE behavior in `hookfs`, rule behavior in `injector`, process-reference replacement in `replacer`, and low-level traced execution in `ptrace`.
 - For a new injector, update `InjectorConfig`, `MultiInjector::build`, the relevant `Injector` hooks, and configuration examples together. Check the FUSE call sites that invoke those hooks.
@@ -60,12 +60,12 @@ Start with the row that matches the requested change. Read callers and related t
 
 Run Cargo commands from the repository root on Linux x86-64 with the pinned toolchain and the dependencies listed in README.md. Select checks for the changed behavior rather than treating every row as a command sequence.
 
-Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Run serially and avoid concurrent test processes because several tests reuse directory names.
+Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Keep the returned FUSE session bound for the whole test so operations use the mounted filesystem. Run serially and avoid concurrent test processes because several tests reuse directory names. Four ignored tests record the known deleted-file descriptor limitation. Run them explicitly when changing that behavior; do not count ignored tests as passes.
 
 | Change or check | Command or action | Coverage and prerequisites |
 | --- | --- | --- |
 | Rust build | `cargo build --locked` | Compiles the library and binary. |
-| Rust static analysis | `cargo clippy --all-features` | Matches the CI feature scope. Needs the Clippy component. |
+| Rust static analysis | `cargo clippy --locked --all-features --all-targets` | Matches the CI feature scope. Needs the Clippy component. |
 | Rust formatting | `cargo fmt --all -- --check` | Checks `rustfmt.toml` rules. Needs the pinned toolchain's rustfmt component. |
 | RPC handling | `cargo test --locked --test jsonrpc_test` | Tests handlers without mounting FUSE. Still compiles the Linux-specific library. |
 | Filesystem behavior | `cargo test --locked --verbose -- --test-threads=1` | Runs the full suite, including real FUSE mounts. Requires the POSIX test setup above. |
@@ -75,13 +75,13 @@ Before running POSIX tests, prepare a disposable environment. These tests recurs
 
 Use `make example` only as a manual workload in an environment prepared for its mounts. It starts a privileged container and mounts host `/tmp`. It does not start toda or prove that injection works.
 
-If the host is macOS, another unsupported platform, or lacks the required Linux test setup, report the build and runtime checks as not run. Do not report source inspection, compilation, or existing CI configuration as proof of a successful injection and recovery cycle.
+On macOS or another unsupported host, use a disposable Linux x86-64 environment for build and runtime checks. If that environment is unavailable, report those checks as not run. When using emulation, report which runtime paths it supports and which remain unverified. Do not report source inspection, compilation, or existing CI configuration as proof of a successful injection and recovery cycle.
 
 ## Keep documentation aligned
 
 Keep README.md focused on building, using, and testing toda. Keep repository architecture and agent instructions here. Update README.md and `config-examples/` when CLI or configuration behavior changes.
 
-Use the workflows as evidence of the configured checks, not proof that a local change passes them. The release workflow runs `make release` on `v*` tags and publishes a Linux amd64 archive. The Docker build does not set an explicit target platform.
+Use the workflows as evidence of the configured checks, not proof that a local change passes them. The release workflow runs `make release` on `v*` tags and publishes a Linux amd64 archive. The Make targets explicitly select `linux/amd64`. The build image uses Debian 12 and the pinned Rust compiler.
 
 ## Report completion
 

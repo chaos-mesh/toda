@@ -1,5 +1,4 @@
 use nix::errno::Errno;
-use nix::Error;
 use thiserror::Error;
 use tracing::error;
 
@@ -31,20 +30,13 @@ pub type Result<T> = std::result::Result<T, HookFsError>;
 
 impl HookFsError {
     pub fn last() -> HookFsError {
-        HookFsError::from(nix::Error::last())
+        HookFsError::from(Errno::last())
     }
 }
 
-impl From<nix::Error> for HookFsError {
-    fn from(err: Error) -> HookFsError {
-        // TODO: match more error types
-        match err {
-            Error::Sys(errno) => HookFsError::Sys(errno),
-            _ => {
-                error!("unknown error {:?}", err);
-                HookFsError::UnknownError
-            }
-        }
+impl From<Errno> for HookFsError {
+    fn from(err: Errno) -> HookFsError {
+        HookFsError::Sys(err)
     }
 }
 

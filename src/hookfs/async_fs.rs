@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::future::Future;
@@ -6,8 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use fuser::*;
-use tracing::trace_span;
-use tracing_futures::Instrument;
+use tracing::{trace_span, Instrument};
 
 use super::errors::Result;
 use super::reply::*;
@@ -226,23 +226,27 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         &mut self,
         _req: &fuser::Request,
         _config: &mut fuser::KernelConfig,
-    ) -> std::result::Result<(), nix::libc::c_int> {
-        self.0.init().map_err(|err| err.into())
+    ) -> std::io::Result<()> {
+        self.0
+            .init()
+            .map_err(|err| std::io::Error::from_raw_os_error(fuse_errno(err).code()))
     }
 
-    fn destroy(&mut self, _req: &fuser::Request) {
+    fn destroy(&mut self) {
         self.0.destroy()
     }
 
-    fn lookup(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEntry) {
+    fn lookup(&self, req: &Request, parent: INodeNo, name: &std::ffi::OsStr, reply: ReplyEntry) {
+        let parent = parent.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.lookup(parent, name).await
         });
     }
 
-    fn forget(&mut self, _req: &Request, ino: u64, nlookup: u64) {
+    fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
 
         // TODO: union the spawn function for request without reply
@@ -251,19 +255,18 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         });
     }
 
-    fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&self, req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
-        spawn_reply(
-            req.unique(),
-            reply,
-            async move { async_impl.getattr(ino).await },
-        );
+        spawn_reply(req.unique().0, reply, async move {
+            async_impl.getattr(ino).await
+        });
     }
 
     fn setattr(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
+        ino: INodeNo,
         mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
@@ -271,15 +274,18 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
         ctime: Option<std::time::SystemTime>,
-        fh: Option<u64>,
+        fh: Option<FileHandle>,
         crtime: Option<std::time::SystemTime>,
         chgtime: Option<std::time::SystemTime>,
         bkuptime: Option<std::time::SystemTime>,
-        flags: Option<u32>,
+        flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
+        let ino = ino.0;
+        let fh = fh.map(|value| value.0);
+        let flags = flags.map(|value| value.bits());
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .setattr(
                     ino, mode, uid, gid, size, atime, mtime, ctime, fh, crtime, chgtime, bkuptime,
@@ -289,323 +295,421 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         });
     }
 
-    fn readlink(&mut self, req: &Request, ino: u64, reply: ReplyData) {
+    fn readlink(&self, req: &Request, ino: INodeNo, reply: ReplyData) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.readlink(ino).await
         });
     }
     fn mknod(
-        &mut self,
+        &self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
         mode: u32,
         umask: u32,
         rdev: u32,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
         let uid = req.uid();
         let gid = req.gid();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .mknod(parent, name, mode, umask, rdev, uid, gid)
                 .await
         });
     }
     fn mkdir(
-        &mut self,
+        &self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
         mode: u32,
         umask: u32,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let uid = req.uid();
         let gid = req.gid();
 
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.mkdir(parent, name, mode, umask, uid, gid).await
         });
     }
-    fn unlink(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+    fn unlink(&self, req: &Request, parent: INodeNo, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+        let parent = parent.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.unlink(parent, name).await
         });
     }
-    fn rmdir(&mut self, req: &Request, parent: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+    fn rmdir(&self, req: &Request, parent: INodeNo, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+        let parent = parent.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.rmdir(parent, name).await
         });
     }
     fn symlink(
-        &mut self,
+        &self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
         link: &Path,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
         let link = link.to_owned();
         let uid = req.uid();
         let gid = req.gid();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.symlink(parent, name, link, uid, gid).await
         });
     }
     fn rename(
-        &mut self,
+        &self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
-        newparent: u64,
+        newparent: INodeNo,
         newname: &std::ffi::OsStr,
-        flags: u32,
+        flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
+        let parent = parent.0;
+        let newparent = newparent.0;
+        let flags = flags.bits();
         let async_impl = self.0.clone();
         let name = name.to_owned();
         let newname = newname.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .rename(parent, name, newparent, newname, flags)
                 .await
         });
     }
     fn link(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        newparent: u64,
+        ino: INodeNo,
+        newparent: INodeNo,
         newname: &std::ffi::OsStr,
         reply: ReplyEntry,
     ) {
+        let ino = ino.0;
+        let newparent = newparent.0;
         let async_impl = self.0.clone();
         let newname = newname.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.link(ino, newparent, newname).await
         });
     }
-    fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        let ino = ino.0;
+        let flags = flags.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.open(ino, flags).await
         });
     }
     fn read(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.map(|value| value.0);
+        let flags = flags.0;
+        let offset = match fuse_offset(offset) {
+            Ok(offset) => offset,
+            Err(err) => {
+                reply.error(fuse_errno(err));
+                return;
+            }
+        };
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .read(ino, fh, offset, size, flags, lock_owner)
                 .await
         });
     }
     fn write(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        write_flags: WriteFlags,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.map(|value| value.0);
+        let flags = flags.0;
+        let write_flags = write_flags.bits();
+        let offset = match fuse_offset(offset) {
+            Ok(offset) => offset,
+            Err(err) => {
+                reply.error(fuse_errno(err));
+                return;
+            }
+        };
         let async_impl = self.0.clone();
         let data = data.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .write(ino, fh, offset, data, write_flags, flags, lock_owner)
                 .await
         });
     }
-    fn flush(&mut self, req: &Request, ino: u64, fh: u64, lock_owner: u64, reply: ReplyEmpty) {
+    fn flush(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        lock_owner: LockOwner,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.flush(ino, fh, lock_owner).await
         });
     }
     fn release(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        flags: i32,
-        lock_owner: Option<u64>,
+        ino: INodeNo,
+        fh: FileHandle,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
         flush: bool,
         reply: ReplyEmpty,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.map(|value| value.0);
+        let flags = flags.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.release(ino, fh, flags, lock_owner, flush).await
         });
     }
-    fn fsync(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
+    fn fsync(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.fsync(ino, fh, datasync).await
         });
     }
-    fn opendir(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn opendir(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        let ino = ino.0;
+        let flags = flags.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.opendir(ino, flags).await
         });
     }
     fn readdir(
-        &mut self,
+        &self,
         _req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let offset = match fuse_offset(offset) {
+            Ok(offset) => offset,
+            Err(err) => {
+                reply.error(fuse_errno(err));
+                return;
+            }
+        };
         let async_impl = self.0.clone();
         spawn(async move {
             match async_impl.readdir(ino, fh, offset, &mut reply).await {
                 Ok(_) => reply.ok(),
-                Err(err) => reply.error(err.into()),
+                Err(err) => reply.error(fuse_errno(err)),
             }
         });
     }
-    fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: i32, reply: ReplyEmpty) {
+    fn releasedir(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let flags = flags.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.releasedir(ino, fh, flags).await
         });
     }
-    fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
+    fn fsyncdir(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.fsyncdir(ino, fh, datasync).await
         });
     }
-    fn statfs(&mut self, req: &Request, ino: u64, reply: ReplyStatfs) {
+    fn statfs(&self, req: &Request, ino: INodeNo, reply: ReplyStatfs) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
-        spawn_reply(
-            req.unique(),
-            reply,
-            async move { async_impl.statfs(ino).await },
-        );
+        spawn_reply(req.unique().0, reply, async move {
+            async_impl.statfs(ino).await
+        });
     }
     fn setxattr(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
+        ino: INodeNo,
         name: &std::ffi::OsStr,
         value: &[u8],
         flags: i32,
         position: u32,
         reply: ReplyEmpty,
     ) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
         let value = value.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.setxattr(ino, name, value, flags, position).await
         });
     }
     fn getxattr(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
+        ino: INodeNo,
         name: &std::ffi::OsStr,
         size: u32,
         reply: ReplyXattr,
     ) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.getxattr(ino, name, size).await
         });
     }
-    fn listxattr(&mut self, req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
+    fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.listxattr(ino, size).await
         });
     }
-    fn removexattr(&mut self, req: &Request, ino: u64, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+    fn removexattr(&self, req: &Request, ino: INodeNo, name: &std::ffi::OsStr, reply: ReplyEmpty) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.removexattr(ino, name).await
         });
     }
-    fn access(&mut self, req: &Request, ino: u64, mask: i32, reply: ReplyEmpty) {
+    fn access(&self, req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
+        let ino = ino.0;
+        let mask = mask.bits();
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl.access(ino, mask).await
         });
     }
     fn create(
-        &mut self,
+        &self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
         mode: u32,
         umask: u32,
         flags: i32,
         reply: ReplyCreate,
     ) {
+        let parent = parent.0;
         let uid = req.uid();
         let gid = req.gid();
 
         let async_impl = self.0.clone();
         let name = name.to_owned();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .create(parent, name, mode, umask, flags, uid, gid)
                 .await
         });
     }
     fn getlk(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        lock_owner: u64,
+        ino: INodeNo,
+        fh: FileHandle,
+        lock_owner: LockOwner,
         start: u64,
         end: u64,
         typ: i32,
         pid: u32,
         reply: ReplyLock,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .getlk(ino, fh, lock_owner, start, end, typ, pid)
                 .await
         });
     }
     fn setlk(
-        &mut self,
+        &self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        lock_owner: u64,
+        ino: INodeNo,
+        fh: FileHandle,
+        lock_owner: LockOwner,
         start: u64,
         end: u64,
         typ: i32,
@@ -613,17 +717,42 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         sleep: bool,
         reply: ReplyEmpty,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let lock_owner = lock_owner.0;
         let async_impl = self.0.clone();
-        spawn_reply(req.unique(), reply, async move {
+        spawn_reply(req.unique().0, reply, async move {
             async_impl
                 .setlk(ino, fh, lock_owner, start, end, typ, pid, sleep)
                 .await
         });
     }
-    fn bmap(&mut self, _req: &Request, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap) {
+    fn bmap(&self, _req: &Request, ino: INodeNo, blocksize: u32, idx: u64, reply: ReplyBmap) {
+        let ino = ino.0;
         let async_impl = self.0.clone();
         spawn(async move {
             async_impl.bmap(ino, blocksize, idx, reply).await;
         });
+    }
+}
+
+fn fuse_offset(offset: u64) -> Result<i64> {
+    i64::try_from(offset).map_err(|_| nix::errno::Errno::EINVAL.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fuse_offset;
+
+    #[test]
+    fn offsets_keep_the_full_signed_range_and_reject_overflow() {
+        assert_eq!(fuse_offset(0).unwrap(), 0);
+        assert_eq!(fuse_offset(i64::MAX as u64).unwrap(), i64::MAX);
+        for offset in [i64::MAX as u64 + 1, u64::MAX] {
+            assert_eq!(
+                libc::c_int::from(fuse_offset(offset).unwrap_err()),
+                libc::EINVAL
+            );
+        }
     }
 }
