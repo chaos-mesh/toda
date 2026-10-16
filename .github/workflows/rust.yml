@@ -20,6 +20,8 @@ jobs:
         run: cargo build --locked --verbose
       - name: Allow access by other FUSE users
         run: echo user_allow_other | sudo tee -a /etc/fuse.conf
+      - name: Mount FUSE request counters
+        run: mountpoint -q /sys/fs/fuse/connections || sudo mount -t fusectl fusectl /sys/fs/fuse/connections
       - name: Run tests
         run: cargo test --locked --verbose -- --test-threads=1
   static_checks:
@@ -31,4 +33,4 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run Clippy
-        run: cargo clippy --locked --all-features --all-targets
+        run: cargo clippy --locked --all-features --all-targets -- -D warnings

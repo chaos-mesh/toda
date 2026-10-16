@@ -227,7 +227,7 @@ impl FdReplacer {
                     .filter(|(_, path)| path.starts_with(detect_path))
                     .filter_map(move |(fd, path)| {
                         trace!("replace fd({}): {}", fd, path.display());
-                        let stripped_path = path.strip_prefix(&detect_path).ok()?;
+                        let stripped_path = path.strip_prefix(detect_path).ok()?;
                         Some((process.clone(), (fd, new_path.join(stripped_path))))
                     })
             })
@@ -254,7 +254,7 @@ impl FdReplacer {
 impl Replacer for FdReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");
-        for (_, accessor) in self.processes.iter_mut() {
+        for accessor in self.processes.values_mut() {
             accessor.run()?;
         }
 

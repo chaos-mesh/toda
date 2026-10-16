@@ -14,17 +14,6 @@
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 
-mod fuse_device;
-mod hookfs;
-mod injector;
-mod jsonrpc;
-mod mount;
-mod mount_injector;
-mod ptrace;
-mod replacer;
-mod stop;
-mod utils;
-
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
@@ -32,16 +21,17 @@ use std::{io, thread};
 
 use anyhow::Result;
 use clap::Parser;
-use injector::InjectorConfig;
-use jsonrpc::start_server;
-use mount_injector::{MountInjectionGuard, MountInjector};
 use nix::sys::signal::{signal, SigHandler, Signal};
 use nix::unistd::{pipe, read, write};
-use replacer::{Replacer, UnionReplacer};
+use toda::fuse_device;
+use toda::injector::InjectorConfig;
+use toda::jsonrpc::{self, start_server};
+use toda::mount_injector::{MountInjectionGuard, MountInjector};
+use toda::replacer::{Replacer, UnionReplacer};
+use toda::utils::encode_path;
 use tokio::runtime::Runtime;
 use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
-use utils::encode_path;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "basic")]

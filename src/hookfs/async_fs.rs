@@ -734,6 +734,20 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
             async_impl.bmap(ino, blocksize, idx, reply).await;
         });
     }
+
+    fn ioctl(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _flags: IoctlFlags,
+        _cmd: u32,
+        _in_data: &[u8],
+        _out_size: u32,
+        reply: ReplyIoctl,
+    ) {
+        reply.error(Errno::ENOTTY);
+    }
 }
 
 fn fuse_offset(offset: u64) -> Result<i64> {

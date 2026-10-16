@@ -13,8 +13,8 @@
 
 use std::fs::{read_link, read_to_string, write, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
-use std::os::unix::fs::symlink;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::{symlink, MetadataExt};
 use std::path::PathBuf;
 use std::sync::{Arc, Once};
 
@@ -27,7 +27,39 @@ use toda::injector::MultiInjector;
 
 static INIT: Once = Once::new();
 
-fn init(name: &str) -> (PathBuf, fuser::BackgroundSession) {
+struct TestSession {
+    session: Option<fuser::BackgroundSession>,
+    waiting: PathBuf,
+}
+
+impl Drop for TestSession {
+    fn drop(&mut self) {
+        // close queues RELEASE asynchronously; unmounting first cancels its reply.
+        let drained = (|| -> std::io::Result<()> {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let waiting = std::fs::read_to_string(&self.waiting)?;
+                if waiting.trim() == "0" {
+                    return Ok(());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("FUSE requests did not finish: {}", waiting.trim()),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        })();
+        let unmounted = self.session.take().unwrap().umount_and_join();
+        if !std::thread::panicking() {
+            drained.unwrap();
+            unmounted.unwrap();
+        }
+    }
+}
+
+fn init(name: &str) -> (PathBuf, TestSession) {
     let test_path_backend: PathBuf = ["/tmp/test_mnt_backend", name].iter().collect();
     let test_path: PathBuf = ["/tmp/test_mnt", name].iter().collect();
 
@@ -57,8 +89,32 @@ fn init(name: &str) -> (PathBuf, fuser::BackgroundSession) {
     ];
 
     let session = fuser::spawn_mount(fs, &test_path, &config).unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    (test_path, session)
+    let device = std::fs::metadata(&test_path).unwrap().dev();
+    let waiting = PathBuf::from(format!(
+        "/sys/fs/fuse/connections/{}/waiting",
+        stat::minor(device)
+    ));
+    assert!(
+        waiting.is_file(),
+        "mount fusectl at /sys/fs/fuse/connections before running POSIX tests"
+    );
+    (
+        test_path,
+        TestSession {
+            session: Some(session),
+            waiting,
+        },
+    )
+}
+
+#[test]
+fn terminal_query_on_regular_file() {
+    let (test_path, _session) = init("terminal_query_on_regular_file");
+    let file = File::create(test_path.join("file")).unwrap();
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), libc::TCGETS, termios.as_mut_ptr()) };
+    assert_eq!(result, -1);
+    assert_eq!(nix::errno::Errno::last(), nix::errno::Errno::ENOTTY);
 }
 
 #[test]
@@ -135,6 +191,7 @@ fn truncate_file() {
 
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .read(true)
         .open(&target_file)
@@ -201,7 +258,7 @@ fn fstat_deleted() {
     let mut files = std::collections::HashMap::<usize, StatFile>::new();
 
     for i in 0..(i_max + 1) {
-        let path: PathBuf = test_path.join(&format!("fstat_deleted_{}", i));
+        let path: PathBuf = test_path.join(format!("fstat_deleted_{}", i));
         let content = vec![0u8; i];
         write(&path, content).unwrap();
 
@@ -214,7 +271,7 @@ fn fstat_deleted() {
         unistd::unlink(&path).unwrap();
     }
 
-    for (_, f) in files.iter_mut() {
+    for f in files.values_mut() {
         let mut stat = stat::fstat(&f.file).unwrap();
 
         f.stat.st_nlink = 0;
@@ -337,7 +394,6 @@ fn append_write() {
     let path = test_path.join("file");
     let mut file = OpenOptions::new()
         .append(true)
-        .write(true)
         .create(true)
         .open(&path)
         .unwrap();
@@ -357,7 +413,6 @@ fn append_unlink_write() {
     let path = test_path.join("file");
     let mut file = OpenOptions::new()
         .append(true)
-        .write(true)
         .create(true)
         .open(&path)
         .unwrap();

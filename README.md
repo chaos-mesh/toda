@@ -114,6 +114,14 @@ cargo test --locked --test jsonrpc_test
 
 The POSIX tests mount FUSE with `allow_other` and delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. Run them in a disposable Linux environment. For a non-root test user, enable `user_allow_other` in `/etc/fuse.conf` and ensure that the user can access `/dev/fuse`.
 
+Mount the FUSE control filesystem if it is not already mounted:
+
+```sh
+mountpoint -q /sys/fs/fuse/connections || sudo mount -t fusectl fusectl /sys/fs/fuse/connections
+```
+
+Tests use its [pending-request counter](https://www.kernel.org/doc/html/latest/filesystems/fuse/fuse.html#control-filesystem) to finish replies before unmounting.
+
 Run the full suite serially, as CI does:
 
 ```sh
@@ -129,6 +137,7 @@ See [AGENTS.md](AGENTS.md) for the module map, change guidelines, and verificati
 ## Limitations
 
 - Kernel caching affects injection. A successful read can remain cached, so subsequent reads might not reach FUSE. Attribute caching can preserve a result from an earlier lookup. Setting `percent` to 100 avoids probabilistic selection differences when an operation reaches FUSE, but does not force cache misses.
+- An optional mode to bypass the content cache is deferred. See [TODO.md](TODO.md) for the proposal and its limits.
 - Paths near 4096 bytes are not supported.
 
 ## License

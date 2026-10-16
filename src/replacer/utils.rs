@@ -6,7 +6,7 @@ pub fn all_processes() -> Result<impl Iterator<Item = Process>> {
         .filter_map(|process| process.ok())
         .filter(|process| -> bool {
             if let Ok(cmdline) = process.cmdline() {
-                !cmdline.iter().map(|stat| stat.contains("toda")).any(|x| x)
+                !cmdline.iter().any(|stat| stat.contains("toda"))
             } else {
                 true
             }

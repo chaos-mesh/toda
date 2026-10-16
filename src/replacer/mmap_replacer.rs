@@ -308,7 +308,7 @@ impl MmapReplacer {
                     })
                     .filter(|(_, case)| case.path.starts_with(detect_path))
                     .filter_map(|(process, mut case)| {
-                        let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
+                        let stripped_path = case.path.strip_prefix(detect_path).ok()?;
                         case.path = new_path.join(stripped_path);
                         Some((process, case))
                     })
@@ -337,7 +337,7 @@ impl MmapReplacer {
 impl Replacer for MmapReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running mmap replacer");
-        for (_, accessor) in self.processes.iter_mut() {
+        for accessor in self.processes.values_mut() {
             accessor.run()?;
         }
 

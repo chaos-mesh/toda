@@ -50,7 +50,7 @@ impl MistakeInjector {
             filter: filter::Filter::build(conf.filter)?,
         })
     }
-    pub fn handle(&self, data: &mut Vec<u8>) -> Result<()> {
+    pub fn handle(&self, data: &mut [u8]) -> Result<()> {
         trace!("sabotage data");
         let mut rng = rand::rng();
         let data_length = data.len();

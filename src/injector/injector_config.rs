@@ -79,13 +79,6 @@ pub enum FileType {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Timespec {
-    pub sec: i64,
-    pub nsec: i32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub enum MistakeType {
     Zero,
     Random,

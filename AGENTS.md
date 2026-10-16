@@ -11,7 +11,7 @@ These instructions apply to the whole repository. Use them to choose which files
 
 ## Project and execution model
 
-toda is a Rust 2018 filesystem fault injector for Chaos Mesh. Its runtime targets Linux x86-64 and combines FUSE forwarding with `ptrace` replacement of existing process references. It builds a library and a binary from the same module tree.
+toda is a Rust 2018 filesystem fault injector for Chaos Mesh. Its runtime targets Linux x86-64 and combines FUSE forwarding with `ptrace` replacement of existing process references. The binary imports the shared implementation from the library crate.
 
 The CLI starts with an empty `Vec<InjectorConfig>`. It moves the target mount to a sibling `__chaosfs__<name>__` path, mounts `HookFs` at the original path, redirects existing references, and enables injection. A separate thread serves JSON-RPC over standard input and standard output. SIGINT and SIGTERM start explicit recovery. `--mount-only` skips process replacement in both directions.
 
@@ -41,7 +41,7 @@ Start with the row that matches the requested change. Read callers and related t
 - Keep `1.99.1` and the committed `Cargo.lock` unless the task includes a toolchain or dependency change. The project uses stable Rust. Do not introduce nightly feature gates to work around a dependency mismatch.
 - Preserve `-C relro-level=full` in `.cargo/config.toml` and the Docker build. It resolves shared-library symbols before mount changes.
 - Follow the stable rustfmt settings in `rustfmt.toml`. Avoid unrelated formatting churn.
-- `src/main.rs` declares its own modules rather than importing the library crate. When adding or removing a shared top-level module, update both crate roots as needed.
+- Declare shared top-level modules in `src/lib.rs`. Import them from `toda` in `src/main.rs` as needed; do not compile a second private module tree in the binary.
 - Keep FUSE behavior in `hookfs`, rule behavior in `injector`, process-reference replacement in `replacer`, and low-level traced execution in `ptrace`.
 - For a new injector, update `InjectorConfig`, `MultiInjector::build`, the relevant `Injector` hooks, and configuration examples together. Check the FUSE call sites that invoke those hooks.
 - Preserve the public configuration shape unless the requested change includes a protocol change. Rules use `type` tags, camelCase fields, flattened filters, and a complete rule array as the single argument to `update`.
@@ -60,12 +60,12 @@ Start with the row that matches the requested change. Read callers and related t
 
 Run Cargo commands from the repository root on Linux x86-64 with the pinned toolchain and the dependencies listed in README.md. Select checks for the changed behavior rather than treating every row as a command sequence.
 
-Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Keep the returned FUSE session bound for the whole test so operations use the mounted filesystem. Run serially and avoid concurrent test processes because several tests reuse directory names. Keep the deleted-open-file and rename-overwrite cases enabled when changing inode paths, file handles, or attributes.
+Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Mount `fusectl` at `/sys/fs/fuse/connections` as shown in README.md; the session guard waits for its pending-request count to reach zero before unmounting and joining the dispatcher. Keep the returned session guard bound for the whole test so operations use the mounted filesystem. Run serially and avoid concurrent test processes because several tests reuse directory names. Keep the deleted-open-file and rename-overwrite cases enabled when changing inode paths, file handles, or attributes.
 
 | Change or check | Command or action | Coverage and prerequisites |
 | --- | --- | --- |
 | Rust build | `cargo build --locked` | Compiles the library and binary. |
-| Rust static analysis | `cargo clippy --locked --all-features --all-targets` | Matches the CI feature scope. Needs the Clippy component. |
+| Rust static analysis | `cargo clippy --locked --all-features --all-targets -- -D warnings` | Matches CI and rejects warnings. Needs the Clippy component. |
 | Rust formatting | `cargo fmt --all -- --check` | Checks `rustfmt.toml` rules. Needs the pinned toolchain's rustfmt component. |
 | RPC handling | `cargo test --locked --test jsonrpc_test` | Tests handlers without mounting FUSE. Still compiles the Linux-specific library. |
 | Filesystem behavior | `cargo test --locked --verbose -- --test-threads=1` | Runs the full suite, including real FUSE mounts. Requires the POSIX test setup above. |
