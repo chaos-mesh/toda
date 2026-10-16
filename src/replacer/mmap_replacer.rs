@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
 use itertools::Itertools;
 use nix::sys::mman::{MapFlags, ProtFlags};
-use procfs::process::MMapPath;
+use procfs::process::{MMPermissions, MMapPath};
 use tracing::{error, info, trace};
 
 use super::utils::all_processes;
@@ -154,9 +154,8 @@ impl ProcessAccessor {
         let mut new_paths = Vec::new();
         self.new_paths.read_to_end(&mut new_paths)?;
 
-        let (cases_ptr, length, _) = self.cases.clone().into_raw_parts();
-        let size = length * std::mem::size_of::<RawReplaceCase>();
-        let cases = unsafe { std::slice::from_raw_parts(cases_ptr as *mut u8, size) };
+        let size = self.cases.len() * std::mem::size_of::<RawReplaceCase>();
+        let cases = unsafe { std::slice::from_raw_parts(self.cases.as_ptr().cast::<u8>(), size) };
 
         self.process.run_codes(|addr| {
             let mut vec_rt =
@@ -166,7 +165,7 @@ impl ProcessAccessor {
                 ; ->cases:
                 ; .bytes cases
                 ; ->cases_length:
-                ; .qword cases.len() as i64
+                ; .u64 cases.len() as u64
                 ; ->new_paths:
                 ; .bytes new_paths.as_slice()
                 ; nop
@@ -240,30 +239,24 @@ impl ProcessAccessor {
     }
 }
 
-fn get_prot_and_flags_from_perms<S: AsRef<str>>(perms: S) -> (u64, u64) {
-    let bytes = perms.as_ref().as_bytes();
+fn get_prot_and_flags_from_perms(perms: MMPermissions) -> (u64, u64) {
     let mut prot = ProtFlags::empty();
     let mut flags = MapFlags::MAP_PRIVATE;
 
-    if bytes[0] == b'r' {
+    if perms.contains(MMPermissions::READ) {
         prot |= ProtFlags::PROT_READ
     }
-    if bytes[1] == b'w' {
+    if perms.contains(MMPermissions::WRITE) {
         prot |= ProtFlags::PROT_WRITE
     }
-    if bytes[2] == b'x' {
+    if perms.contains(MMPermissions::EXECUTE) {
         prot |= ProtFlags::PROT_EXEC
     }
-    if bytes[3] == b's' {
+    if perms.contains(MMPermissions::SHARED) {
         flags = MapFlags::MAP_SHARED;
     }
 
-    trace!(
-        "perms: {}, prot: {:?}, flags: {:?}",
-        perms.as_ref(),
-        prot,
-        flags
-    );
+    trace!("perms: {:?}, prot: {:?}, flags: {:?}", perms, prot, flags);
     (prot.bits() as u64, flags.bits() as u64)
 }
 
@@ -315,12 +308,12 @@ impl MmapReplacer {
                     })
                     .filter(|(_, case)| case.path.starts_with(detect_path))
                     .filter_map(|(process, mut case)| {
-                        let stripped_path = case.path.strip_prefix(&detect_path).ok()?;
+                        let stripped_path = case.path.strip_prefix(detect_path).ok()?;
                         case.path = new_path.join(stripped_path);
                         Some((process, case))
                     })
             })
-            .group_by(|(process, _)| process.pid)
+            .chunk_by(|(process, _)| process.pid)
             .into_iter()
             .filter_map(|(pid, group)| Some((ptrace::trace(pid).ok()?, group)))
             .map(|(process, group)| (process, group.map(|(_, group)| group)))
@@ -344,10 +337,79 @@ impl MmapReplacer {
 impl Replacer for MmapReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running mmap replacer");
-        for (_, accessor) in self.processes.iter_mut() {
+        for accessor in self.processes.values_mut() {
             accessor.run()?;
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapping_permissions_preserve_protection_and_sharing() {
+        let cases = [
+            (
+                MMPermissions::NONE,
+                ProtFlags::empty(),
+                MapFlags::MAP_PRIVATE,
+            ),
+            (
+                MMPermissions::READ | MMPermissions::PRIVATE,
+                ProtFlags::PROT_READ,
+                MapFlags::MAP_PRIVATE,
+            ),
+            (
+                MMPermissions::WRITE | MMPermissions::SHARED,
+                ProtFlags::PROT_WRITE,
+                MapFlags::MAP_SHARED,
+            ),
+            (
+                MMPermissions::EXECUTE | MMPermissions::PRIVATE,
+                ProtFlags::PROT_EXEC,
+                MapFlags::MAP_PRIVATE,
+            ),
+            (
+                MMPermissions::READ
+                    | MMPermissions::WRITE
+                    | MMPermissions::EXECUTE
+                    | MMPermissions::SHARED,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+                MapFlags::MAP_SHARED,
+            ),
+        ];
+        for (perms, prot, flags) in cases {
+            assert_eq!(
+                get_prot_and_flags_from_perms(perms),
+                (prot.bits() as u64, flags.bits() as u64)
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_records_match_x64_code_layout() {
+        let mut builder = ProcessAccessorBuilder::new();
+        builder
+            .push_case(0x1000, 4096, 3, 2, PathBuf::from("/first"), 0x2000)
+            .unwrap();
+        builder
+            .push_case(0x3000, 8192, 5, 1, PathBuf::from("/second"), 0x4000)
+            .unwrap();
+
+        let size = builder.cases.len() * std::mem::size_of::<RawReplaceCase>();
+        let bytes =
+            unsafe { std::slice::from_raw_parts(builder.cases.as_ptr().cast::<u8>(), size) };
+        let expected: Vec<u8> = [
+            0x1000_u64, 4096, 3, 2, 0, 0x2000, 0x3000, 8192, 5, 1, 7, 0x4000,
+        ]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+
+        assert_eq!(bytes, expected);
+        assert_eq!(builder.new_paths.into_inner(), b"/first\0/second\0");
     }
 }

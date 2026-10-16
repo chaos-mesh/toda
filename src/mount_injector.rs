@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -10,7 +9,7 @@ use retry::{retry, OperationResult};
 use tracing::info;
 
 use crate::injector::{InjectorConfig, MultiInjector};
-use crate::{hookfs, mount, stop};
+use crate::{hookfs, mount};
 
 #[derive(Debug)]
 pub struct MountInjector {
@@ -24,6 +23,7 @@ pub struct MountInjectionGuard {
     new_path: PathBuf,
     pub hookfs: Arc<hookfs::HookFs>,
     handler: Option<JoinHandle<Result<()>>>,
+    unmounter: Option<fuser::SessionUnmounter>,
 }
 
 impl MountInjectionGuard {
@@ -39,7 +39,12 @@ impl MountInjectionGuard {
         let mount_point = self.original_path.clone();
 
         retry(Fixed::from_millis(500).take(20), || {
-            if let Err(err) = umount(mount_point.as_path()) {
+            // fuser consumes its mount handle on failure; retries must call umount directly.
+            let result = match self.unmounter.take() {
+                Some(mut unmounter) => unmounter.unmount(),
+                None => umount(mount_point.as_path()).map_err(std::io::Error::from),
+            };
+            if let Err(err) = result {
                 info!("umount returns error: {:?}", err);
                 OperationResult::Retry(err)
             } else {
@@ -100,6 +105,7 @@ impl MountInjector {
 
     // This method should be called in host namespace
     pub fn mount(&mut self) -> Result<MountInjectionGuard> {
+        let injectors = MultiInjector::build(self.injector_config.clone())?;
         let original_path = self.original_path.clone();
         let new_path = self.new_path.clone();
 
@@ -112,46 +118,51 @@ impl MountInjector {
             return Err(anyhow!("inject on a root mount"));
         }
 
-        let injectors = MultiInjector::build(self.injector_config.clone())?;
-
         let hookfs = Arc::new(hookfs::HookFs::new(
             &self.original_path,
             &self.new_path,
             injectors,
         ));
 
-        let original_path = self.original_path.clone();
-        let new_path = self.new_path.clone();
-        let cloned_hookfs = hookfs.clone();
+        let fs = hookfs::AsyncFileSystem::from(hookfs.clone());
 
-        let (before_mount_waiter, before_mount_guard) = stop::lock();
-        let handler = std::thread::spawn(box move || {
-            let fs = hookfs::AsyncFileSystem::from(cloned_hookfs);
+        let mut config = fuser::Config::default();
+        config.acl = fuser::SessionACL::All;
+        config.mount_options = vec![
+            fuser::MountOption::FSName("toda".to_owned()),
+            fuser::MountOption::DefaultPermissions,
+        ];
 
-            std::fs::create_dir_all(new_path.as_path())?;
+        info!("mount with config {:?}", config);
 
-            let args = ["allow_other", "fsname=toda", "default_permissions", "nonempty"];
-            let flags: Vec<_> = args
-                .iter()
-                .flat_map(|item| vec![OsStr::new("-o"), OsStr::new(item)])
-                .collect();
-
-            info!("mount with flags {:?}", flags);
-
-            drop(before_mount_guard);
-            fuser::mount(fs, &original_path, &flags)?;
+        let mut session = match fuser::Session::new(fs, &self.original_path, &config) {
+            Ok(session) => session,
+            Err(error) => {
+                if let Err(rollback_error) = mounts.move_mount(&self.new_path, &self.original_path)
+                {
+                    let message = format!(
+                        "FUSE mount failed: {}; failed to restore mount from {} to {}: {:#}",
+                        error,
+                        self.new_path.display(),
+                        self.original_path.display(),
+                        rollback_error
+                    );
+                    return Err(anyhow!(error).context(message));
+                }
+                return Err(error.into());
+            }
+        };
+        let unmounter = session.unmount_callable();
+        let handler = std::thread::spawn(move || {
+            session.run()?;
 
             drop(hookfs::runtime::RUNTIME.write().unwrap().take().unwrap());
 
             Ok(())
         });
-        // TODO: remove this. But wait for FUSE gets up
-        // Related Issue: https://github.com/zargony/fuse-rs/issues/9
-        before_mount_waiter.wait();
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
         Ok(MountInjectionGuard {
             handler: Some(handler),
+            unmounter: Some(unmounter),
             hookfs,
             original_path: self.original_path.clone(),
             new_path: self.new_path.clone(),

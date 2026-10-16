@@ -4,10 +4,10 @@ mod reply;
 pub mod runtime;
 mod utils;
 
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
+use std::os::fd::{BorrowedFd, IntoRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,11 +19,10 @@ use fuser::*;
 use libc::{c_void, lgetxattr, llistxattr, lremovexattr, lsetxattr};
 use nix::dir;
 use nix::errno::Errno;
-use nix::fcntl::{open, readlink, renameat, OFlag};
+use nix::fcntl::{open, readlink, renameat, AtFlags, OFlag, AT_FDCWD};
 use nix::sys::{stat, statfs};
 use nix::unistd::{
-    close, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, FchownatFlags,
-    Gid, LinkatFlags, Uid,
+    close, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid, Uid,
 };
 pub use reply::Reply;
 use reply::*;
@@ -159,12 +158,12 @@ pub struct HookFs {
 struct Node {
     pub ref_count: u64,
     // TODO: optimize paths with a combination data structure
-    paths: LinkedList<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 impl Node {
     fn get_path(&self) -> Option<&Path> {
-        self.paths.back().map(|item| item.as_path())
+        self.paths.last().map(|item| item.as_path())
     }
 
     fn insert(&mut self, path: PathBuf) {
@@ -174,11 +173,11 @@ impl Node {
             }
         }
 
-        self.paths.push_back(path);
+        self.paths.push(path);
     }
 
     fn remove(&mut self, path: &Path) {
-        self.paths.drain_filter(|x| x == path);
+        self.paths.retain(|x| x != path);
     }
 }
 
@@ -275,13 +274,15 @@ impl std::ops::DerefMut for Dir {
 #[derive(Debug)]
 pub struct File {
     pub fd: RawFd,
+    ino: u64,
     original_path: PathBuf,
 }
 
 impl File {
-    fn new<P: AsRef<Path>>(fd: RawFd, path: P) -> File {
+    fn new<P: AsRef<Path>>(fd: RawFd, ino: u64, path: P) -> File {
         File {
             fd,
+            ino,
             original_path: path.as_ref().to_owned(),
         }
     }
@@ -324,7 +325,7 @@ impl HookFs {
 
         // TODO: create a standalone runtime only for interrupt is too ugly.
         //       this RWLock is actually redundant, and the injector is rarely written.
-        let mut rt  = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let injector = self.injector.read().await;
             injector.interrupt();
@@ -381,9 +382,9 @@ impl AsyncFileSystemImpl for HookFs {
 
         let stat = self.get_file_attr(&path).await?;
 
-        trace!("insert ({}, {}) into inode_map", stat.ino, path.display());
-        inode_map.insert_path(stat.ino, path.clone());
-        inode_map.increase_ref(stat.ino);
+        trace!("insert ({}, {}) into inode_map", stat.ino.0, path.display());
+        inode_map.insert_path(stat.ino.0, path.clone());
+        inode_map.increase_ref(stat.ino.0);
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with {:?}", stat);
@@ -401,20 +402,62 @@ impl AsyncFileSystemImpl for HookFs {
     }
 
     #[instrument(skip(self))]
-    async fn getattr(&self, ino: u64) -> Result<Attr> {
+    async fn getattr(&self, ino: u64, fh: Option<u64>) -> Result<Attr> {
         trace!("getattr");
 
-        inject_with_ino!(self, GETATTR, ino);
-
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        trace!("getting attr from path {}", path.display());
-        let stat = self.get_file_attr(path).await?;
+        let opened_files = self.opened_files.read().await;
+        let file = fh
+            .and_then(|fh| opened_files.get(fh as usize).ok())
+            .filter(|file| file.ino == ino)
+            .or_else(|| {
+                opened_files
+                    .iter()
+                    .find_map(|(_, file)| (file.ino == ino).then_some(file))
+            });
+        let (mut stat, path) = if let Some(file) = file {
+            let path = file.original_path().to_owned();
+            let fd = nix::unistd::dup(unsafe { BorrowedFd::borrow_raw(file.fd) })?;
+            drop(opened_files);
+            let paths = {
+                let inode_map = self.inode_map.read().await;
+                inode_map
+                    .get(&ino)
+                    .map(|node| node.paths.clone())
+                    .unwrap_or_default()
+            };
+            let (fd, path) = spawn_blocking(move || -> Result<_> {
+                let descriptor_stat = stat::fstat(&fd)?;
+                let path = paths
+                    .into_iter()
+                    .rev()
+                    .find(|path| {
+                        stat::lstat(path).is_ok_and(|candidate_stat| {
+                            candidate_stat.st_dev == descriptor_stat.st_dev
+                                && candidate_stat.st_ino == descriptor_stat.st_ino
+                        })
+                    })
+                    .unwrap_or(path);
+                Ok((fd, path))
+            })
+            .await??;
+            inject!(self, GETATTR, &path);
+            let stat = spawn_blocking(move || stat::fstat(&fd)).await??;
+            (convert_libc_stat_to_fuse_stat(stat)?, path)
+        } else {
+            drop(opened_files);
+            inject_with_ino!(self, GETATTR, ino);
+            let inode_map = self.inode_map.read().await;
+            let path = inode_map.get_path(ino)?;
+            trace!("getting attr from path {}", path.display());
+            let stat = convert_libc_stat_to_fuse_stat(async_stat(path).await?)?;
+            (stat, path.to_owned())
+        };
+        inject_attr!(self, stat, &path);
 
         trace!("return with {:?}", stat);
 
         let mut reply = Attr::new(stat);
-        inject_reply!(self, GETATTR, path, reply, Attr);
+        inject_reply!(self, GETATTR, &path, reply, Attr);
 
         Ok(reply)
     }
@@ -513,8 +556,8 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        inode_map.insert_path(stat.ino, path.clone());
-        inode_map.increase_ref(stat.ino);
+        inode_map.insert_path(stat.ino.0, path.clone());
+        inode_map.increase_ref(stat.ino.0);
         let mut reply = Entry::new(stat, 0);
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
 
@@ -547,8 +590,8 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        inode_map.insert_path(stat.ino, path.clone());
-        inode_map.increase_ref(stat.ino);
+        inode_map.insert_path(stat.ino.0, path.clone());
+        inode_map.increase_ref(stat.ino.0);
         let mut reply = Entry::new(stat, 0);
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
 
@@ -571,8 +614,8 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("unlinking {}", path.display());
         async_unlink(&path).await?;
 
-        trace!("remove {:x} from inode_map", &stat.ino);
-        inode_map.remove_path(stat.ino, &path);
+        trace!("remove {:x} from inode_map", &stat.ino.0);
+        inode_map.remove_path(stat.ino.0, &path);
 
         Ok(())
     }
@@ -593,8 +636,8 @@ impl AsyncFileSystemImpl for HookFs {
         let cpath = CString::new(path.as_os_str().as_bytes())?;
         async_rmdir(cpath).await?;
 
-        trace!("remove {:x} from inode_map", &stat.ino);
-        inode_map.remove_path(stat.ino, &path);
+        trace!("remove {:x} from inode_map", &stat.ino.0);
+        inode_map.remove_path(stat.ino.0, &path);
 
         Ok(())
     }
@@ -620,14 +663,14 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("create symlink: {} => {}", path.display(), link.display());
 
         let path_clone = path.clone();
-        spawn_blocking(move || symlinkat(&link, None, &path_clone)).await??;
+        spawn_blocking(move || symlinkat(&link, AT_FDCWD, &path_clone)).await??;
 
         trace!("setting owner {}:{}", uid, gid);
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        inode_map.insert_path(stat.ino, path.clone());
-        inode_map.increase_ref(stat.ino);
+        inode_map.insert_path(stat.ino.0, path.clone());
+        inode_map.increase_ref(stat.ino.0);
         let mut reply = Entry::new(stat, 0);
         inject_reply!(self, LOOKUP, path.as_path(), reply, Entry);
 
@@ -668,13 +711,14 @@ impl AsyncFileSystemImpl for HookFs {
 
         let new_path_clone = new_path.clone();
         let old_path_clone = old_path.clone();
-        spawn_blocking(move || renameat(None, &old_path_clone, None, &new_path_clone)).await??;
+        spawn_blocking(move || renameat(AT_FDCWD, &old_path_clone, AT_FDCWD, &new_path_clone))
+            .await??;
 
         let stat = self.get_file_attr(&new_path).await?;
-        trace!("remove ({:x}, {})", stat.ino, old_path.display());
-        inode_map.remove_path(stat.ino, &old_path);
-        trace!("insert ({:x}, {})", stat.ino, new_path.display());
-        inode_map.insert_path(stat.ino, &new_path);
+        trace!("remove ({:x}, {})", stat.ino.0, old_path.display());
+        inode_map.remove_path(stat.ino.0, &old_path);
+        trace!("insert ({:x}, {})", stat.ino.0, new_path.display());
+        inode_map.insert_path(stat.ino.0, &new_path);
 
         Ok(())
     }
@@ -698,18 +742,18 @@ impl AsyncFileSystemImpl for HookFs {
         let new_path_clone = new_path.clone();
         spawn_blocking(move || {
             linkat(
-                None,
+                AT_FDCWD,
                 &original_path,
-                None,
+                AT_FDCWD,
                 &new_path_clone,
-                LinkatFlags::NoSymlinkFollow,
+                AtFlags::empty(),
             )
         })
         .await??;
 
         let stat = self.get_file_attr(&new_path).await?;
-        inode_map.insert_path(stat.ino, new_path.clone());
-        inode_map.increase_ref(stat.ino);
+        inode_map.insert_path(stat.ino.0, new_path.clone());
+        inode_map.increase_ref(stat.ino.0);
         let mut reply = Entry::new(stat, 0);
         inject_reply!(self, LOOKUP, new_path.as_path(), reply, Entry);
 
@@ -728,7 +772,7 @@ impl AsyncFileSystemImpl for HookFs {
         // filter out append. The kernel layer will translate the
         // offsets for us appropriately.
         let filtered_flags = flags & (!libc::O_APPEND) & (!libc::O_DIRECT);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
 
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?;
@@ -736,11 +780,15 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("open with flags: {:?}", filtered_flags);
 
         let fd = async_open(path, filtered_flags, stat::Mode::S_IRWXU).await?;
-        let fh = self.opened_files.write().await.insert(File::new(fd, path)) as u64;
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(fd, ino, path)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 
-        let mut reply = Open::new(fh, 0);
+        let mut reply = Open::new(fh, FopenFlags::empty());
         inject_reply!(self, OPEN, path, reply, Open);
         // TODO: force DIRECT_IO is not a great option
         Ok(reply)
@@ -802,7 +850,11 @@ impl AsyncFileSystemImpl for HookFs {
             let file = opened_files.get(fh as usize)?;
             file.fd
         };
-        spawn_blocking(move || fsync(fd)).await??;
+        spawn_blocking(move || {
+            // The opened_files read guard prevents release from closing this descriptor.
+            fsync(unsafe { BorrowedFd::borrow_raw(fd) })
+        })
+        .await??;
         Ok(())
     }
 
@@ -836,7 +888,11 @@ impl AsyncFileSystemImpl for HookFs {
             file.fd
         };
 
-        spawn_blocking(move || fsync(fd)).await??;
+        spawn_blocking(move || {
+            // The opened_files read guard prevents release from closing this descriptor.
+            fsync(unsafe { BorrowedFd::borrow_raw(fd) })
+        })
+        .await??;
 
         Ok(())
     }
@@ -849,7 +905,7 @@ impl AsyncFileSystemImpl for HookFs {
         let inode_map = self.inode_map.read().await;
         let path = { inode_map.get_path(ino)?.to_owned() };
         let filtered_flags = flags & (!libc::O_APPEND);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
 
         let path_clone = path.clone();
         let dir = spawn_blocking(move || {
@@ -861,7 +917,7 @@ impl AsyncFileSystemImpl for HookFs {
         let fh = self.opened_dirs.write().await.insert(Dir::new(dir, &path)) as u64;
         trace!("return with fh: {}, flags: {}", fh, flags);
 
-        let mut reply = Open::new(fh, flags);
+        let mut reply = Open::new(fh, FopenFlags::empty());
         inject_reply!(self, OPENDIR, &path, reply, Open);
         Ok(reply)
     }
@@ -889,15 +945,15 @@ impl AsyncFileSystemImpl for HookFs {
             trace!("empty reply");
             return Ok(());
         }
-        for (index, entry) in all_entries.iter().enumerate().skip(offset as usize) {
-            let entry = (*entry)?;
+        for (index, entry) in all_entries.into_iter().enumerate().skip(offset) {
+            let entry = entry?;
 
             let name = entry.file_name();
             let name = OsStr::from_bytes(name.to_bytes());
 
             let file_type = convert_filetype(entry.file_type().ok_or(Error::UnknownFileType)?);
 
-            if !reply.add(entry.ino(), (index + 1) as i64, file_type, name) {
+            if !reply.add(INodeNo(entry.ino()), (index + 1) as u64, file_type, name) {
                 trace!("add file {:?}", entry);
             } else {
                 trace!("buffer is full");
@@ -990,9 +1046,6 @@ impl AsyncFileSystemImpl for HookFs {
         let cpath = CString::new(path.as_os_str().as_bytes())?;
         let name = CString::new(name.as_bytes())?;
 
-        let mut buf = Vec::new();
-        buf.resize(size as usize, 0u8);
-
         let data = async_getxattr(cpath, name, size as usize).await?;
 
         let mut reply = if size == 0 {
@@ -1016,8 +1069,7 @@ impl AsyncFileSystemImpl for HookFs {
         let path = inode_map.get_path(ino)?.to_owned();
         let cpath = CString::new(path.as_os_str().as_bytes())?;
 
-        let mut buf = Vec::new();
-        buf.resize(size as usize, 0u8);
+        let buf = vec![0u8; size as usize];
 
         let shared_buf = std::sync::Arc::new(buf);
         let buf_clone = shared_buf.clone();
@@ -1073,7 +1125,7 @@ impl AsyncFileSystemImpl for HookFs {
 
         let inode_map = self.inode_map.read().await;
         let path = inode_map.get_path(ino)?.to_owned();
-        let mask = AccessFlags::from_bits_truncate(mask as i32);
+        let mask = AccessFlags::from_bits_truncate(mask);
         let path_clone = path.to_path_buf();
 
         spawn_blocking(move || nix::unistd::access(&path_clone, mask)).await??;
@@ -1102,7 +1154,7 @@ impl AsyncFileSystemImpl for HookFs {
         };
 
         let filtered_flags = flags & (!libc::O_APPEND);
-        let filtered_flags = OFlag::from_bits_truncate(filtered_flags as i32);
+        let filtered_flags = OFlag::from_bits_truncate(filtered_flags);
         let mode = stat::Mode::from_bits_truncate(mode);
 
         trace!("create with flags: {:?}, mode: {:?}", filtered_flags, mode);
@@ -1111,14 +1163,18 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        let fh = self.opened_files.write().await.insert(File::new(fd, &path));
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(fd, stat.ino.0, &path));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
         trace!("return with stat: {:?} fh: {}", stat, fh);
-        inode_map.insert_path(stat.ino, path.clone());
-        inode_map.increase_ref(stat.ino);
-        let mut reply = Create::new(stat, 0, fh as u64, 0);
+        inode_map.insert_path(stat.ino.0, path.clone());
+        inode_map.increase_ref(stat.ino.0);
+        let mut reply = Create::new(stat, 0, fh as u64, FopenFlags::empty());
         inject_reply!(self, CREATE, path.as_path(), reply, Create);
         Ok(reply)
     }
@@ -1158,7 +1214,7 @@ impl AsyncFileSystemImpl for HookFs {
     #[instrument(skip(self))]
     async fn bmap(&self, _ino: u64, _blocksize: u32, _idx: u64, reply: ReplyBmap) {
         error!("unimplemented");
-        reply.error(nix::libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 }
 
@@ -1180,14 +1236,13 @@ async fn async_setxattr(path: CString, name: CString, data: Vec<u8>, flags: i32)
 
 async fn async_getxattr(path: CString, name: CString, size: usize) -> Result<Vec<u8>> {
     spawn_blocking(move || {
-        let mut buf = Vec::new();
-        buf.resize(size, 0);
+        let mut buf = vec![0; size];
 
         let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
         let name_ptr = &name.as_bytes_with_nul()[0] as *const u8 as *const libc::c_char;
         let buf_ptr = buf.as_slice() as *const [u8] as *mut [u8] as *mut libc::c_void;
 
-        let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size as usize) };
+        let ret = unsafe { lgetxattr(path_ptr, name_ptr, buf_ptr, size) };
         if ret == -1 {
             Err(Error::last())
         } else {
@@ -1200,8 +1255,7 @@ async fn async_getxattr(path: CString, name: CString, size: usize) -> Result<Vec
 
 async fn async_read(fd: RawFd, count: usize, offset: i64) -> Result<Vec<u8>> {
     spawn_blocking(move || unsafe {
-        let mut buf = Vec::new();
-        buf.resize(count, 0);
+        let mut buf = vec![0; count];
         let ret = libc::pread(fd, buf.as_ptr() as *mut c_void, count, offset);
         if ret == -1 {
             Err(Error::last())
@@ -1235,11 +1289,11 @@ async fn async_lchown(path: &Path, uid: Option<u32>, gid: Option<u32>) -> Result
     let path_clone = path.to_path_buf();
     spawn_blocking(move || {
         fchownat(
-            None,
+            AT_FDCWD,
             &path_clone,
             uid.map(Uid::from_raw),
             gid.map(Gid::from_raw),
-            FchownatFlags::NoFollowSymlink,
+            AtFlags::AT_SYMLINK_NOFOLLOW,
         )
     })
     .await??;
@@ -1250,7 +1304,7 @@ async fn async_fchmodat(path: &Path, mode: u32) -> Result<()> {
     let path_clone = path.to_path_buf();
     spawn_blocking(move || {
         stat::fchmodat(
-            None,
+            AT_FDCWD,
             &path_clone,
             stat::Mode::from_bits_truncate(mode),
             stat::FchmodatFlags::FollowSymlink,
@@ -1334,9 +1388,405 @@ async fn async_rmdir(path: CString) -> Result<()> {
 async fn async_open(path: &Path, filtered_flags: OFlag, mode: stat::Mode) -> Result<RawFd> {
     let path_clone = path.to_path_buf();
     let fd = spawn_blocking(move || open(&path_clone, filtered_flags, mode)).await??;
-    Ok(fd)
+    Ok(fd.into_raw_fd())
 }
 
 async fn async_close(fd: RawFd) -> Result<()> {
     Ok(spawn_blocking(move || close(fd)).await??)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn getattr_test_fs(name: &str) -> (PathBuf, HookFs) {
+        let directory = std::env::temp_dir().join(format!(
+            "toda-getattr-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let fs = HookFs::new(
+            directory.with_extension("visible"),
+            &directory,
+            MultiInjector::build(Vec::new()).unwrap(),
+        );
+        (directory, fs)
+    }
+
+    #[tokio::test]
+    async fn getattr_unlinked_file_uses_descriptor_and_original_filter_path() {
+        let (directory, fs) = getattr_test_fs("unlink");
+        let file = fs
+            .create(
+                1,
+                "file".into(),
+                0o600,
+                0,
+                libc::O_CREAT | libc::O_RDWR,
+                Uid::current().as_raw(),
+                Gid::current().as_raw(),
+            )
+            .await
+            .unwrap();
+        let ino = file.attr.ino.0;
+        std::fs::write(directory.join("file"), b"old").unwrap();
+        fs.unlink(1, "file".into()).await.unwrap();
+        std::fs::write(directory.join("file"), b"replacement").unwrap();
+        let replacement = fs.lookup(1, "file".into()).await.unwrap().stat;
+        assert_ne!(replacement.ino.0, ino);
+        assert_eq!(replacement.size, 11);
+
+        for fh in [Some(file.fh), None] {
+            let attr = fs.getattr(ino, fh).await.unwrap().attr;
+            assert_eq!(attr.ino.0, ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 0);
+        }
+
+        let visible_path = fs.rebuild_path(directory.join("file")).unwrap();
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "fault", "path": visible_path, "methods": ["GETATTR"],
+                "percent": 100, "faults": [{"errno": libc::EIO, "weight": 1}]
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs.enable_injection();
+        for fh in [Some(file.fh), None] {
+            assert!(matches!(
+                fs.getattr(ino, fh).await,
+                Err(Error::Sys(Errno::EIO))
+            ));
+        }
+
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "attrOverride", "path": visible_path,
+                "percent": 100, "size": 123, "perm": 0o400
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        for fh in [Some(file.fh), None] {
+            let attr = fs.getattr(ino, fh).await.unwrap().attr;
+            assert_eq!(attr.ino.0, ino);
+            assert_eq!(attr.nlink, 0);
+            assert_eq!(attr.size, 123);
+            assert_eq!(attr.perm, 0o400);
+        }
+        fs.release(ino, file.fh, 0, None, false).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_renamed_open_file_filters_by_current_visible_path() {
+        let (directory, fs) = getattr_test_fs("rename-filter");
+        std::fs::write(directory.join("old"), b"contents").unwrap();
+        let original = fs.lookup(1, "old".into()).await.unwrap().stat;
+        let handle = fs.open(original.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "old".into(), 1, "new".into(), 0)
+            .await
+            .unwrap();
+        fs.enable_injection();
+
+        for (name, matches) in [("new", true), ("old", false)] {
+            let visible_path = directory.with_extension("visible").join(name);
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "fault", "path": visible_path, "methods": ["GETATTR"],
+                    "percent": 100, "faults": [{"errno": libc::EIO, "weight": 1}]
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let result = fs.getattr(original.ino.0, fh).await;
+                if matches {
+                    assert!(matches!(result, Err(Error::Sys(Errno::EIO))));
+                } else {
+                    let attr = result.unwrap().attr;
+                    assert_eq!(attr.ino, original.ino);
+                    assert_eq!(attr.size, original.size);
+                    assert_eq!(attr.perm, original.perm);
+                    assert_eq!(attr.nlink, 1);
+                }
+            }
+
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "attrOverride", "path": visible_path,
+                    "percent": 100, "size": 123, "perm": 0o400
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let attr = fs.getattr(original.ino.0, fh).await.unwrap().attr;
+                assert_eq!(attr.ino, original.ino);
+                assert_eq!(attr.nlink, 1);
+                assert_eq!(attr.size, if matches { 123 } else { original.size });
+                assert_eq!(attr.perm, if matches { 0o400 } else { original.perm });
+            }
+
+            *fs.injector.write().await = MultiInjector::build(Vec::new()).unwrap();
+            for fh in [Some(handle), None] {
+                let attr = fs.getattr(original.ino.0, fh).await.unwrap().attr;
+                assert_eq!(attr.ino, original.ino);
+                assert_eq!(attr.size, original.size);
+                assert_eq!(attr.perm, original.perm);
+                assert_eq!(attr.nlink, 1);
+            }
+        }
+        assert_eq!(std::fs::read(directory.join("new")).unwrap(), b"contents");
+        fs.release(original.ino.0, handle, 0, None, false)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_rename_overwrite_filters_by_remaining_hard_link() {
+        let (directory, fs) = getattr_test_fs("rename-hard-link");
+        std::fs::write(directory.join("source"), b"replacement").unwrap();
+        std::fs::write(directory.join("destination"), b"old").unwrap();
+        std::fs::hard_link(directory.join("destination"), directory.join("alias")).unwrap();
+        let alias = fs.lookup(1, "alias".into()).await.unwrap().stat;
+        let destination = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_eq!(alias.ino, destination.ino);
+        assert_eq!(destination.nlink, 2);
+        let handle = fs.open(destination.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "source".into(), 1, "destination".into(), 0)
+            .await
+            .unwrap();
+        let replacement = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_ne!(replacement.ino, destination.ino);
+        assert_eq!(replacement.size, 11);
+
+        for fh in [Some(handle), None] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 1);
+        }
+        fs.enable_injection();
+        for (name, matches) in [("alias", true), ("destination", false)] {
+            *fs.injector.write().await = MultiInjector::build(
+                serde_json::from_value(serde_json::json!([{
+                    "type": "fault", "path": directory.with_extension("visible").join(name),
+                    "methods": ["GETATTR"], "percent": 100,
+                    "faults": [{"errno": libc::EIO, "weight": 1}]
+                }]))
+                .unwrap(),
+            )
+            .unwrap();
+            for fh in [Some(handle), None] {
+                let result = fs.getattr(destination.ino.0, fh).await;
+                if matches {
+                    assert!(matches!(result, Err(Error::Sys(Errno::EIO))));
+                } else {
+                    let attr = result.unwrap().attr;
+                    assert_eq!(attr.ino, destination.ino);
+                    assert_eq!(attr.size, 3);
+                    assert_eq!(attr.nlink, 1);
+                }
+            }
+        }
+        *fs.injector.write().await = MultiInjector::build(Vec::new()).unwrap();
+        for fh in [Some(handle), None] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 1);
+        }
+        fs.release(destination.ino.0, handle, 0, None, false)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_rename_overwrite_preserves_open_inode() {
+        let (directory, fs) = getattr_test_fs("rename");
+        std::fs::write(directory.join("source"), b"replacement").unwrap();
+        std::fs::write(directory.join("destination"), b"old").unwrap();
+        let source = fs.lookup(1, "source".into()).await.unwrap().stat;
+        let destination = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        let source_fh = fs.open(source.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        let destination_fh = fs.open(destination.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "source".into(), 1, "destination".into(), 0)
+            .await
+            .unwrap();
+
+        for fh in [Some(destination_fh), None, Some(source_fh)] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 0);
+        }
+        let replacement = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_eq!(replacement.ino, source.ino);
+        assert_eq!(replacement.size, 11);
+        fs.release(source.ino.0, source_fh, 0, None, false)
+            .await
+            .unwrap();
+        fs.release(destination.ino.0, destination_fh, 0, None, false)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_latency_does_not_block_unrelated_release() {
+        let (directory, fs) = getattr_test_fs("latency");
+        std::fs::write(directory.join("delayed"), b"delayed").unwrap();
+        std::fs::write(directory.join("other"), b"other").unwrap();
+        let delayed_ino = fs.lookup(1, "delayed".into()).await.unwrap().stat.ino.0;
+        let other_ino = fs.lookup(1, "other".into()).await.unwrap().stat.ino.0;
+        let delayed_fh = fs.open(delayed_ino, libc::O_RDONLY).await.unwrap().fh;
+        let other_fh = fs.open(other_ino, libc::O_RDONLY).await.unwrap().fh;
+        let visible_path = fs.rebuild_path(directory.join("delayed")).unwrap();
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "latency", "path": visible_path, "methods": ["GETATTR"],
+                "percent": 100, "latency": "10s"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs.enable_injection();
+        let fs = std::sync::Arc::new(fs);
+        let delayed_fs = fs.clone();
+        let request =
+            tokio::spawn(async move { delayed_fs.getattr(delayed_ino, Some(delayed_fh)).await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while fs.injector.try_write().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let release = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            fs.release(other_ino, other_fh, 0, None, false),
+        )
+        .await;
+        if release.is_ok() {
+            fs.release(delayed_ino, delayed_fh, 0, None, false)
+                .await
+                .unwrap();
+            assert!(!request.is_finished());
+            fs.unlink(1, "delayed".into()).await.unwrap();
+            std::fs::write(directory.join("delayed"), b"replacement").unwrap();
+        }
+        fs.injector.read().await.interrupt();
+        let attr = request.await.unwrap().unwrap().attr;
+        if release.is_err() {
+            fs.release(other_ino, other_fh, 0, None, false)
+                .await
+                .unwrap();
+            fs.release(delayed_ino, delayed_fh, 0, None, false)
+                .await
+                .unwrap();
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+        release
+            .expect("GETATTR latency blocked an unrelated release")
+            .unwrap();
+        assert_eq!(attr.ino.0, delayed_ino);
+        assert_eq!(attr.size, 7);
+        assert_eq!(attr.nlink, 0);
+    }
+
+    #[tokio::test]
+    async fn getattr_directory_handle_collision_uses_directory_path() {
+        let (directory, fs) = getattr_test_fs("directory");
+        std::fs::write(directory.join("file"), b"file").unwrap();
+        std::fs::create_dir(directory.join("dir")).unwrap();
+        let file = fs.lookup(1, "file".into()).await.unwrap().stat;
+        let dir = fs.lookup(1, "dir".into()).await.unwrap().stat;
+        let file_fh = fs.open(file.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        let dir_fh = fs.opendir(dir.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        assert_eq!(file_fh, dir_fh);
+
+        for fh in [Some(dir_fh), None] {
+            let attr = fs.getattr(dir.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, dir.ino);
+            assert_eq!(attr.kind, FileType::Directory);
+        }
+        fs.release(file.ino.0, file_fh, 0, None, false)
+            .await
+            .unwrap();
+        fs.releasedir(dir.ino.0, dir_fh, 0).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn removing_paths_preserves_the_last_remaining_link() {
+        let mut node = Node::default();
+        node.insert(PathBuf::from("first"));
+        node.insert(PathBuf::from("second"));
+        node.insert(PathBuf::from("third"));
+        node.insert(PathBuf::from("first"));
+        assert_eq!(node.get_path(), Some(Path::new("third")));
+
+        node.remove(Path::new("second"));
+        assert_eq!(node.get_path(), Some(Path::new("third")));
+        node.remove(Path::new("third"));
+        assert_eq!(node.get_path(), Some(Path::new("first")));
+        node.remove(Path::new("first"));
+        assert_eq!(node.get_path(), None);
+    }
+
+    #[tokio::test]
+    async fn backing_file_stays_open_until_release() {
+        let directory = std::env::temp_dir();
+        let name = OsString::from(format!(
+            "toda-fd-lifetime-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join(&name);
+        drop(std::fs::File::create_new(&path).unwrap());
+        let fs = HookFs::new(
+            &directory,
+            &directory,
+            MultiInjector::build(Vec::new()).unwrap(),
+        );
+        let ino = fs.lookup(1, name).await.unwrap().stat.ino.0;
+        let fh = fs.open(ino, libc::O_RDWR).await.unwrap().fh;
+        let fd = fs.opened_files.read().await.get(fh as usize).unwrap().fd;
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+        let target = std::fs::canonicalize(&path).unwrap();
+        assert_eq!(std::fs::read_link(&descriptor_path).unwrap(), target);
+
+        let written = fs
+            .write(ino, fh, 0, b"still open".to_vec(), 0, 0, None)
+            .await
+            .unwrap();
+        assert_eq!(written.size, 10);
+        fs.flush(ino, fh, 0).await.unwrap();
+        fs.fsync(ino, fh, false).await.unwrap();
+        let data = fs.read(ino, fh, 0, 10, 0, None).await.unwrap().data;
+        assert_eq!(data, b"still open");
+        assert_eq!(std::fs::read(&path).unwrap(), b"still open");
+
+        fs.release(ino, fh, 0, None, false).await.unwrap();
+        // A different thread can reuse the descriptor number after release.
+        assert_ne!(std::fs::read_link(&descriptor_path).ok(), Some(target));
+        assert!(matches!(
+            fs.read(ino, fh, 0, 10, 0, None).await,
+            Err(Error::FhNotFound { .. })
+        ));
+        std::fs::remove_file(path).unwrap();
+    }
 }

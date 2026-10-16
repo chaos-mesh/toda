@@ -1,4 +1,4 @@
-use fuser::{FileAttr, FileType, TimeOrNow};
+use fuser::{FileAttr, FileType, INodeNo, TimeOrNow};
 use libc::{UTIME_NOW, UTIME_OMIT};
 use nix::dir;
 
@@ -36,7 +36,7 @@ pub fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         _ => return Err(Error::UnknownFileType),
     };
     Ok(FileAttr {
-        ino: stat.st_ino,
+        ino: INodeNo(stat.st_ino),
         size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
         atime: system_time(stat.st_atime, stat.st_atime_nsec),
@@ -49,7 +49,6 @@ pub fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         gid: stat.st_gid,
         rdev: stat.st_rdev as u32,
         blksize: stat.st_blksize as u32,
-        padding: 0,                // unknown attr
         crtime: system_time(0, 0), // It's macOS only
         flags: 0,                  // It's macOS only
     })

@@ -105,9 +105,8 @@ impl ProcessAccessor {
         let mut new_paths = Vec::new();
         self.new_paths.read_to_end(&mut new_paths)?;
 
-        let (cases_ptr, length, _) = self.cases.clone().into_raw_parts();
-        let size = length * std::mem::size_of::<ReplaceCase>();
-        let cases = unsafe { std::slice::from_raw_parts(cases_ptr as *mut u8, size) };
+        let size = self.cases.len() * std::mem::size_of::<ReplaceCase>();
+        let cases = unsafe { std::slice::from_raw_parts(self.cases.as_ptr().cast::<u8>(), size) };
 
         self.process.run_codes(|addr| {
             let mut vec_rt =
@@ -117,7 +116,7 @@ impl ProcessAccessor {
                 ; ->cases:
                 ; .bytes cases
                 ; ->cases_length:
-                ; .qword cases.len() as i64
+                ; .u64 cases.len() as u64
                 ; ->new_paths:
                 ; .bytes new_paths.as_slice()
                 ; nop
@@ -220,6 +219,7 @@ impl FdReplacer {
             })
             .flat_map(|(process, fd)| {
                 fd.into_iter()
+                    .filter_map(|entry| entry.ok())
                     .filter_map(|entry| match entry.target {
                         FDTarget::Path(path) => Some((entry.fd as u64, path)),
                         _ => None,
@@ -227,11 +227,11 @@ impl FdReplacer {
                     .filter(|(_, path)| path.starts_with(detect_path))
                     .filter_map(move |(fd, path)| {
                         trace!("replace fd({}): {}", fd, path.display());
-                        let stripped_path = path.strip_prefix(&detect_path).ok()?;
+                        let stripped_path = path.strip_prefix(detect_path).ok()?;
                         Some((process.clone(), (fd, new_path.join(stripped_path))))
                     })
             })
-            .group_by(|(process, _)| process.pid)
+            .chunk_by(|(process, _)| process.pid)
             .into_iter()
             .filter_map(|(pid, group)| Some((ptrace::trace(pid).ok()?, group)))
             .map(|(process, group)| (process, group.map(|(_, group)| group)))
@@ -254,10 +254,33 @@ impl FdReplacer {
 impl Replacer for FdReplacer {
     fn run(&mut self) -> Result<()> {
         info!("running fd replacer");
-        for (_, accessor) in self.processes.iter_mut() {
+        for accessor in self.processes.values_mut() {
             accessor.run()?;
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacement_records_match_x64_code_layout() {
+        let mut builder = ProcessAccessorBuilder::new();
+        builder.push_case(7, PathBuf::from("/first")).unwrap();
+        builder.push_case(9, PathBuf::from("/second")).unwrap();
+
+        let size = builder.cases.len() * std::mem::size_of::<ReplaceCase>();
+        let bytes =
+            unsafe { std::slice::from_raw_parts(builder.cases.as_ptr().cast::<u8>(), size) };
+        let expected: Vec<u8> = [7_u64, 0, 9, 7]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+
+        assert_eq!(bytes, expected);
+        assert_eq!(builder.new_paths.into_inner(), b"/first\0/second\0");
     }
 }

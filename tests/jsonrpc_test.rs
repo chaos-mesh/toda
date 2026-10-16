@@ -47,11 +47,19 @@ fn test_should_not_update_config_if_status_is_failed() {
 fn test_should_fail_if_config_is_bad() {
     let (tx, _rx) = channel();
     let request = r#"{"jsonrpc": "2.0","method":"update","params":[["blah"]],"id":1}"#;
-    let response = r#"{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params: invalid type: string \"blah\", expected internally tagged enum."},"id":1}"#;
     let io = new_handler(jsonrpc::RpcImpl::new(
         Mutex::new(Ok(())),
         Mutex::new(tx),
         None,
     ));
-    assert_eq!(io.handle_request_sync(request), Some(response.to_string()));
+    let response = io.handle_request_sync(request).unwrap();
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["jsonrpc"], "2.0");
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Invalid params:"));
+    assert!(response.get("result").is_none());
 }

@@ -11,11 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
-#![feature(async_closure)]
-#![feature(vec_into_raw_parts)]
-#![feature(atomic_mut_ptr)]
-#![feature(drain_filter)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::too_many_arguments)]
 

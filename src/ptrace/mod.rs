@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
+use std::io::IoSlice;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -8,17 +9,14 @@ use anyhow::{anyhow, Result};
 use nix::errno::Errno;
 use nix::sys::mman::{MapFlags, ProtFlags};
 use nix::sys::signal::Signal;
-use nix::sys::uio::{process_vm_writev, IoVec, RemoteIoVec};
+use nix::sys::uio::{process_vm_writev, RemoteIoVec};
 use nix::sys::{ptrace, wait};
 use nix::unistd::Pid;
-use nix::Error::Sys;
 use procfs::process::Task;
 use procfs::ProcError;
 use retry::delay::Fixed;
-use retry::Error::{self, Operation};
 use retry::OperationResult;
-use tracing::{error, info, instrument, trace, warn};
-use Error::Internal;
+use tracing::{info, instrument, trace, warn};
 
 // There should be only one PtraceManager in one thread. But as we don't implement TLS
 // , we cannot use thread-local variables safely.
@@ -44,13 +42,11 @@ fn thread_is_gone(state: char) -> bool {
 fn attach_task(task: &Task) -> Result<()> {
     let pid = Pid::from_raw(task.tid);
     let process = procfs::process::Process::new(task.tid)?;
+    let state = process.stat()?.state;
 
     trace!("attach task: {}", task.tid);
     match ptrace::attach(pid) {
-        Err(Sys(errno))
-            if errno == Errno::ESRCH
-                || (errno == Errno::EPERM && thread_is_gone(process.stat.state)) =>
-        {
+        Err(errno) if errno == Errno::ESRCH || (errno == Errno::EPERM && thread_is_gone(state)) => {
             info!("task {} doesn't exist, maybe has stopped", task.tid)
         }
         Err(err) => {
@@ -145,7 +141,7 @@ impl PtraceManager {
                                                 Ok(()) => {
                                                     info!("successfully detached task: {}", task.tid);
                                                 }
-                                                Err(Sys(Errno::ESRCH)) => trace!(
+                                                Err(Errno::ESRCH) => trace!(
                                                     "task {} doesn't exist, maybe has stopped or not traced",
                                                     task.tid
                                                 ),
@@ -162,14 +158,7 @@ impl PtraceManager {
                         },
                     ) {
                         warn!("fail to detach: {:?}", err);
-                        match err {
-                            Operation {
-                                error: e,
-                                total_delay: _,
-                                tries: _,
-                            } => return Err(e),
-                            Internal(err) => error!("internal error: {:?}", err),
-                        }
+                        return Err(err.error);
                     };
                 }
 
@@ -253,13 +242,7 @@ impl TracedProcess {
             ptrace::setregs(pid, regs)?;
 
             // We only support x86-64 platform now, so using hard coded `LittleEndian` here is ok.
-            unsafe {
-                ptrace::write(
-                    pid,
-                    cur_ins_ptr as *mut libc::c_void,
-                    0x050f as *mut libc::c_void,
-                )?
-            };
+            ptrace::write(pid, cur_ins_ptr as *mut libc::c_void, 0x050f)?;
             ptrace::step(pid, None)?;
 
             loop {
@@ -325,7 +308,7 @@ impl TracedProcess {
 
         process_vm_writev(
             pid,
-            &[IoVec::from_slice(content)],
+            &[IoSlice::new(content)],
             &[RemoteIoVec {
                 base: addr as usize,
                 len: content.len(),
@@ -406,14 +389,7 @@ struct ThreadGuard {
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
         let pid = Pid::from_raw(self.tid);
-        unsafe {
-            ptrace::write(
-                pid,
-                self.regs.rip as *mut libc::c_void,
-                self.rip_ins as *mut libc::c_void,
-            )
-            .unwrap();
-        }
+        ptrace::write(pid, self.regs.rip as *mut libc::c_void, self.rip_ins).unwrap();
         ptrace::setregs(pid, self.regs).unwrap();
     }
 }

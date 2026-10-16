@@ -2,7 +2,7 @@ use std::cmp::{max, min};
 use std::path::Path;
 
 use async_trait::async_trait;
-use rand::Rng;
+use rand::RngExt;
 use tracing::{debug, trace};
 
 use super::injector_config::{MistakeConfig, MistakeType, MistakesConfig};
@@ -50,20 +50,20 @@ impl MistakeInjector {
             filter: filter::Filter::build(conf.filter)?,
         })
     }
-    pub fn handle(&self, data: &mut Vec<u8>) -> Result<()> {
+    pub fn handle(&self, data: &mut [u8]) -> Result<()> {
         trace!("sabotage data");
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_length = data.len();
         let mistake = &self.mistake;
         let occurrence = match mistake.max_occurrences {
             0 => 0,
-            mo => rng.gen_range(1, mo + 1),
+            mo => rng.random_range(1..=mo),
         };
         for _ in 0..occurrence {
-            let pos = rng.gen_range(0, max(data_length, 1));
+            let pos = rng.random_range(0..max(data_length, 1));
             let length = match min(mistake.max_length, data_length - pos) {
                 0 => 0,
-                l => rng.gen_range(1, l + 1),
+                l => rng.random_range(1..=l),
             };
             debug!(
                 "Setting index [{},{}) to {:?}",

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use nix::errno::Errno;
-use rand::Rng;
+use rand::RngExt;
 use tracing::{debug, trace};
 
 use super::injector_config::FaultsConfig;
@@ -24,8 +24,8 @@ impl Injector for FaultInjector {
         debug!("test filter");
         if self.filter.filter(method, path) {
             debug!("inject io fault");
-            let mut rng = rand::thread_rng();
-            let attempt: f64 = rng.gen();
+            let mut rng = rand::rng();
+            let attempt: f64 = rng.random();
             let mut attempt = (attempt * (self.sum as f64)) as i32;
 
             for (err, p) in self.errnos.iter() {
@@ -49,7 +49,7 @@ impl FaultInjector {
         let errnos: Vec<_> = conf
             .faults
             .iter()
-            .map(|item| (Errno::from_i32(item.errno), item.weight))
+            .map(|item| (Errno::from_raw(item.errno), item.weight))
             .collect();
 
         let sum = errnos.iter().fold(0, |acc, w| acc + w.1);

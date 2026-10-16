@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use fuser::{FileAttr, FileType};
+use fuser::{FileAttr, FileType, INodeNo};
 use tracing::{debug, trace};
 
 use super::injector_config::{AttrOverrideConfig, FileType as ConfigFileType, FilterConfig};
@@ -40,7 +40,7 @@ impl Injector for AttrOverrideInjector {
 
         if let Some(ino) = self.ino {
             trace!("overriding ino");
-            attr.ino = ino
+            attr.ino = INodeNo(ino)
         }
         if let Some(size) = self.size {
             trace!("overriding size");

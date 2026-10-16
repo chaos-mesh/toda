@@ -18,9 +18,9 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
-	"sync"
 )
 
 func main() {
@@ -36,8 +36,9 @@ func main() {
 
 	var wg sync.WaitGroup
 	for i := 0; i <= 100; i++ {
+		wg.Add(1)
 		go func() {
-			wg.Add(1)
+			defer wg.Done()
 			for {
 				var fVec []*os.File
 				var mMap [][]byte
