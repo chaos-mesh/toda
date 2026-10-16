@@ -50,7 +50,7 @@ Start with the row that matches the requested change. Read callers and related t
 ## Check the contracts affected by your change
 
 - For mount or process replacement changes, trace both `inject` and `resume` in `src/main.rs`. Recovery is explicit. Dropping `MountInjectionGuard` does not restore the mount. Check failure paths, pending delays, mount restoration, and traced-thread detachment.
-- For path changes, preserve the distinction between the backing path and the visible path. `HookFs` translates backing paths to the original visible paths before filtering. Check mount management and `src/utils.rs` for the same backing path convention.
+- For path changes, preserve the distinction between the backing path and the visible path. `HookFs` translates backing paths to the original visible paths before filtering. Check mount management and `src/utils.rs` for the same backing path convention. Open-file attributes must come from the backing descriptor after unlink or rename-overwrite; keep the saved path for injection filters, not file identity.
 - For injector changes, preserve configuration order and first-error behavior in fallible hooks unless the task changes those contracts. `update` builds a complete replacement list before taking the write lock. Inspect lock scope and the affected FUSE call sites.
 - For configuration validation changes, account for current permissive behavior. Unknown method names are discarded, invalid glob patterns become unrestricted path filters, and `percent` is not range-checked. Changing these behaviors affects existing configurations.
 - For RPC changes, check both `result` and JSON-RPC error behavior. `get_status` records initial setup rather than continuous mount health. Some failures are strings in `result`; malformed parameters produce JSON-RPC errors.
@@ -60,7 +60,7 @@ Start with the row that matches the requested change. Read callers and related t
 
 Run Cargo commands from the repository root on Linux x86-64 with the pinned toolchain and the dependencies listed in README.md. Select checks for the changed behavior rather than treating every row as a command sequence.
 
-Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Keep the returned FUSE session bound for the whole test so operations use the mounted filesystem. Run serially and avoid concurrent test processes because several tests reuse directory names. Four ignored tests record the known deleted-file descriptor limitation. Run them explicitly when changing that behavior; do not count ignored tests as passes.
+Before running POSIX tests, prepare a disposable environment. These tests recursively delete and recreate directories under `/tmp/test_mnt` and `/tmp/test_mnt_backend`. They mount FUSE with `allow_other`, require access to `/dev/fuse`, and need `user_allow_other` in `/etc/fuse.conf` for non-root users. Keep the returned FUSE session bound for the whole test so operations use the mounted filesystem. Run serially and avoid concurrent test processes because several tests reuse directory names. Keep the deleted-open-file and rename-overwrite cases enabled when changing inode paths, file handles, or attributes.
 
 | Change or check | Command or action | Coverage and prerequisites |
 | --- | --- | --- |

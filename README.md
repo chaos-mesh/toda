@@ -120,7 +120,7 @@ Run the full suite serially, as CI does:
 cargo test --locked --verbose -- --test-threads=1
 ```
 
-The POSIX tests cover filesystem operations. Four cases for the deleted-file descriptor limitation are marked ignored. They can be run with `cargo test --locked --test posix_test -- --ignored --test-threads=1`. The suite does not cover the full CLI injection and recovery flow.
+The POSIX tests cover filesystem operations, including access through open files after deletion or replacement by rename. The suite does not cover the full CLI injection and recovery flow.
 
 `make example` builds and starts a privileged Docker container that repeatedly reads and writes files through a volume at `/var/run/test`. It is a workload for manual testing. It does not start toda or configure injection automatically.
 
@@ -130,7 +130,6 @@ See [AGENTS.md](AGENTS.md) for the module map, change guidelines, and verificati
 
 - Kernel caching affects injection. A successful read can remain cached, so subsequent reads might not reach FUSE. Attribute caching can preserve a result from an earlier lookup. Setting `percent` to 100 avoids probabilistic selection differences when an operation reaches FUSE, but does not force cache misses.
 - Paths near 4096 bytes are not supported.
-- Looking up attributes through a file descriptor after its file has been deleted is a known limitation.
 
 ## License
 

@@ -274,13 +274,15 @@ impl std::ops::DerefMut for Dir {
 #[derive(Debug)]
 pub struct File {
     pub fd: RawFd,
+    ino: u64,
     original_path: PathBuf,
 }
 
 impl File {
-    fn new<P: AsRef<Path>>(fd: RawFd, path: P) -> File {
+    fn new<P: AsRef<Path>>(fd: RawFd, ino: u64, path: P) -> File {
         File {
             fd,
+            ino,
             original_path: path.as_ref().to_owned(),
         }
     }
@@ -400,20 +402,40 @@ impl AsyncFileSystemImpl for HookFs {
     }
 
     #[instrument(skip(self))]
-    async fn getattr(&self, ino: u64) -> Result<Attr> {
+    async fn getattr(&self, ino: u64, fh: Option<u64>) -> Result<Attr> {
         trace!("getattr");
 
-        inject_with_ino!(self, GETATTR, ino);
-
-        let inode_map = self.inode_map.read().await;
-        let path = inode_map.get_path(ino)?;
-        trace!("getting attr from path {}", path.display());
-        let stat = self.get_file_attr(path).await?;
+        let opened_files = self.opened_files.read().await;
+        let file = fh
+            .and_then(|fh| opened_files.get(fh as usize).ok())
+            .filter(|file| file.ino == ino)
+            .or_else(|| {
+                opened_files
+                    .iter()
+                    .find_map(|(_, file)| (file.ino == ino).then_some(file))
+            });
+        let (mut stat, path) = if let Some(file) = file {
+            let path = file.original_path().to_owned();
+            let fd = nix::unistd::dup(unsafe { BorrowedFd::borrow_raw(file.fd) })?;
+            drop(opened_files);
+            inject!(self, GETATTR, &path);
+            let stat = spawn_blocking(move || stat::fstat(&fd)).await??;
+            (convert_libc_stat_to_fuse_stat(stat)?, path)
+        } else {
+            drop(opened_files);
+            inject_with_ino!(self, GETATTR, ino);
+            let inode_map = self.inode_map.read().await;
+            let path = inode_map.get_path(ino)?;
+            trace!("getting attr from path {}", path.display());
+            let stat = convert_libc_stat_to_fuse_stat(async_stat(path).await?)?;
+            (stat, path.to_owned())
+        };
+        inject_attr!(self, stat, &path);
 
         trace!("return with {:?}", stat);
 
         let mut reply = Attr::new(stat);
-        inject_reply!(self, GETATTR, path, reply, Attr);
+        inject_reply!(self, GETATTR, &path, reply, Attr);
 
         Ok(reply)
     }
@@ -736,7 +758,11 @@ impl AsyncFileSystemImpl for HookFs {
         trace!("open with flags: {:?}", filtered_flags);
 
         let fd = async_open(path, filtered_flags, stat::Mode::S_IRWXU).await?;
-        let fh = self.opened_files.write().await.insert(File::new(fd, path)) as u64;
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(fd, ino, path)) as u64;
 
         trace!("return with fh: {}, flags: {}", fh, 0);
 
@@ -1119,7 +1145,11 @@ impl AsyncFileSystemImpl for HookFs {
         async_lchown(&path, Some(uid), Some(gid)).await?;
 
         let stat = self.get_file_attr(&path).await?;
-        let fh = self.opened_files.write().await.insert(File::new(fd, &path));
+        let fh = self
+            .opened_files
+            .write()
+            .await
+            .insert(File::new(fd, stat.ino.0, &path));
 
         // TODO: support generation number
         // this can be implemented with ioctl FS_IOC_GETVERSION
@@ -1352,6 +1382,208 @@ async fn async_close(fd: RawFd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn getattr_test_fs(name: &str) -> (PathBuf, HookFs) {
+        let directory = std::env::temp_dir().join(format!(
+            "toda-getattr-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let fs = HookFs::new(
+            directory.with_extension("visible"),
+            &directory,
+            MultiInjector::build(Vec::new()).unwrap(),
+        );
+        (directory, fs)
+    }
+
+    #[tokio::test]
+    async fn getattr_unlinked_file_uses_descriptor_and_original_filter_path() {
+        let (directory, fs) = getattr_test_fs("unlink");
+        let file = fs
+            .create(
+                1,
+                "file".into(),
+                0o600,
+                0,
+                libc::O_CREAT | libc::O_RDWR,
+                Uid::current().as_raw(),
+                Gid::current().as_raw(),
+            )
+            .await
+            .unwrap();
+        let ino = file.attr.ino.0;
+        std::fs::write(directory.join("file"), b"old").unwrap();
+        fs.unlink(1, "file".into()).await.unwrap();
+        std::fs::write(directory.join("file"), b"replacement").unwrap();
+        let replacement = fs.lookup(1, "file".into()).await.unwrap().stat;
+        assert_ne!(replacement.ino.0, ino);
+        assert_eq!(replacement.size, 11);
+
+        for fh in [Some(file.fh), None] {
+            let attr = fs.getattr(ino, fh).await.unwrap().attr;
+            assert_eq!(attr.ino.0, ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 0);
+        }
+
+        let visible_path = fs.rebuild_path(directory.join("file")).unwrap();
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "fault", "path": visible_path, "methods": ["GETATTR"],
+                "percent": 100, "faults": [{"errno": libc::EIO, "weight": 1}]
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs.enable_injection();
+        for fh in [Some(file.fh), None] {
+            assert!(matches!(
+                fs.getattr(ino, fh).await,
+                Err(Error::Sys(Errno::EIO))
+            ));
+        }
+
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "attrOverride", "path": visible_path,
+                "percent": 100, "size": 123, "perm": 0o400
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        for fh in [Some(file.fh), None] {
+            let attr = fs.getattr(ino, fh).await.unwrap().attr;
+            assert_eq!(attr.ino.0, ino);
+            assert_eq!(attr.nlink, 0);
+            assert_eq!(attr.size, 123);
+            assert_eq!(attr.perm, 0o400);
+        }
+        fs.release(ino, file.fh, 0, None, false).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_rename_overwrite_preserves_open_inode() {
+        let (directory, fs) = getattr_test_fs("rename");
+        std::fs::write(directory.join("source"), b"replacement").unwrap();
+        std::fs::write(directory.join("destination"), b"old").unwrap();
+        let source = fs.lookup(1, "source".into()).await.unwrap().stat;
+        let destination = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        let source_fh = fs.open(source.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        let destination_fh = fs.open(destination.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        fs.rename(1, "source".into(), 1, "destination".into(), 0)
+            .await
+            .unwrap();
+
+        for fh in [Some(destination_fh), None, Some(source_fh)] {
+            let attr = fs.getattr(destination.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, destination.ino);
+            assert_eq!(attr.size, 3);
+            assert_eq!(attr.nlink, 0);
+        }
+        let replacement = fs.lookup(1, "destination".into()).await.unwrap().stat;
+        assert_eq!(replacement.ino, source.ino);
+        assert_eq!(replacement.size, 11);
+        fs.release(source.ino.0, source_fh, 0, None, false)
+            .await
+            .unwrap();
+        fs.release(destination.ino.0, destination_fh, 0, None, false)
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn getattr_latency_does_not_block_unrelated_release() {
+        let (directory, fs) = getattr_test_fs("latency");
+        std::fs::write(directory.join("delayed"), b"delayed").unwrap();
+        std::fs::write(directory.join("other"), b"other").unwrap();
+        let delayed_ino = fs.lookup(1, "delayed".into()).await.unwrap().stat.ino.0;
+        let other_ino = fs.lookup(1, "other".into()).await.unwrap().stat.ino.0;
+        let delayed_fh = fs.open(delayed_ino, libc::O_RDONLY).await.unwrap().fh;
+        let other_fh = fs.open(other_ino, libc::O_RDONLY).await.unwrap().fh;
+        let visible_path = fs.rebuild_path(directory.join("delayed")).unwrap();
+        *fs.injector.write().await = MultiInjector::build(
+            serde_json::from_value(serde_json::json!([{
+                "type": "latency", "path": visible_path, "methods": ["GETATTR"],
+                "percent": 100, "latency": "10s"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs.enable_injection();
+        let fs = std::sync::Arc::new(fs);
+        let delayed_fs = fs.clone();
+        let request =
+            tokio::spawn(async move { delayed_fs.getattr(delayed_ino, Some(delayed_fh)).await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while fs.injector.try_write().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let release = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            fs.release(other_ino, other_fh, 0, None, false),
+        )
+        .await;
+        if release.is_ok() {
+            fs.release(delayed_ino, delayed_fh, 0, None, false)
+                .await
+                .unwrap();
+            assert!(!request.is_finished());
+            fs.unlink(1, "delayed".into()).await.unwrap();
+            std::fs::write(directory.join("delayed"), b"replacement").unwrap();
+        }
+        fs.injector.read().await.interrupt();
+        let attr = request.await.unwrap().unwrap().attr;
+        if release.is_err() {
+            fs.release(other_ino, other_fh, 0, None, false)
+                .await
+                .unwrap();
+            fs.release(delayed_ino, delayed_fh, 0, None, false)
+                .await
+                .unwrap();
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+        release
+            .expect("GETATTR latency blocked an unrelated release")
+            .unwrap();
+        assert_eq!(attr.ino.0, delayed_ino);
+        assert_eq!(attr.size, 7);
+        assert_eq!(attr.nlink, 0);
+    }
+
+    #[tokio::test]
+    async fn getattr_directory_handle_collision_uses_directory_path() {
+        let (directory, fs) = getattr_test_fs("directory");
+        std::fs::write(directory.join("file"), b"file").unwrap();
+        std::fs::create_dir(directory.join("dir")).unwrap();
+        let file = fs.lookup(1, "file".into()).await.unwrap().stat;
+        let dir = fs.lookup(1, "dir".into()).await.unwrap().stat;
+        let file_fh = fs.open(file.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        let dir_fh = fs.opendir(dir.ino.0, libc::O_RDONLY).await.unwrap().fh;
+        assert_eq!(file_fh, dir_fh);
+
+        for fh in [Some(dir_fh), None] {
+            let attr = fs.getattr(dir.ino.0, fh).await.unwrap().attr;
+            assert_eq!(attr.ino, dir.ino);
+            assert_eq!(attr.kind, FileType::Directory);
+        }
+        fs.release(file.ino.0, file_fh, 0, None, false)
+            .await
+            .unwrap();
+        fs.releasedir(dir.ino.0, dir_fh, 0).await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn removing_paths_preserves_the_last_remaining_link() {

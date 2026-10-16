@@ -164,7 +164,6 @@ fn mkdir_rmdir() {
 }
 
 #[test]
-#[ignore = "known limitation: getattr uses a path after the open file is unlinked"]
 fn nlink_zero() {
     let (test_path, _session) = init("nlink_zero");
 
@@ -190,7 +189,6 @@ fn nlink_zero() {
 //
 // Excercises the fd-finding logic in rawBridge.GetAttr.
 #[test]
-#[ignore = "known limitation: getattr uses a path after the open file is unlinked"]
 fn fstat_deleted() {
     let (test_path, _session) = init("fstat_deleted");
 
@@ -320,7 +318,6 @@ fn rename_overwrite(test_path: PathBuf, dest_exist: bool) {
 }
 
 #[test]
-#[ignore = "known limitation: getattr uses a path after the open file is unlinked"]
 fn read_unlink() {
     let (test_path, _session) = init("rename_overwrite_dest_no_exist");
     let path = test_path.join("file");
@@ -355,7 +352,6 @@ fn append_write() {
 }
 
 #[test]
-#[ignore = "known limitation: getattr uses a path after the open file is unlinked"]
 fn append_unlink_write() {
     let (test_path, _session) = init("append_unlink_write");
     let path = test_path.join("file");

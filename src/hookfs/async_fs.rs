@@ -35,7 +35,7 @@ pub trait AsyncFileSystemImpl: Send + Sync {
 
     async fn forget(&self, ino: u64, nlookup: u64);
 
-    async fn getattr(&self, ino: u64) -> Result<Attr>;
+    async fn getattr(&self, ino: u64, fh: Option<u64>) -> Result<Attr>;
 
     async fn setattr(
         &self,
@@ -255,11 +255,11 @@ impl<T: AsyncFileSystemImpl + 'static> Filesystem for AsyncFileSystem<T> {
         });
     }
 
-    fn getattr(&self, req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+    fn getattr(&self, req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
         let ino = ino.0;
         let async_impl = self.0.clone();
         spawn_reply(req.unique().0, reply, async move {
-            async_impl.getattr(ino).await
+            async_impl.getattr(ino, fh.map(|fh| fh.0)).await
         });
     }
 
