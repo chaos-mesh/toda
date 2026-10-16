@@ -32,7 +32,7 @@ Start with the row that matches the requested change. Read callers and related t
 | Process replacement | `src/replacer/` | File descriptor, working directory, and memory mapping replacement. |
 | Traced execution | `src/ptrace/mod.rs` | Thread attachment, register and memory access, injected syscalls, and detach guards. |
 | Shared helpers | `src/utils.rs`, `src/stop.rs` | Backing path construction and thread coordination. |
-| Verification | `tests/jsonrpc_test.rs`, `tests/posix_test.rs` | RPC handler tests and FUSE filesystem integration tests. |
+| Verification | `tests/jsonrpc_test.rs`, `tests/posix_test.rs`, `tests/mount_injector_test.rs` | RPC handlers, FUSE filesystem behavior, and mount lifecycle integration tests. |
 | Build and release | `Cargo.toml`, `Cargo.lock`, `rust-toolchain`, `.cargo/config.toml`, `Dockerfile`, `Makefile`, `.github/workflows/` | Dependencies, toolchain, linker flags, image builds, CI, and release packaging. |
 | Manual examples | `config-examples/`, `example/` | RPC configuration examples and a Go filesystem workload. |
 
@@ -49,7 +49,7 @@ Start with the row that matches the requested change. Read callers and related t
 
 ## Check the contracts affected by your change
 
-- For mount or process replacement changes, trace both `inject` and `resume` in `src/main.rs`. Recovery is explicit. Dropping `MountInjectionGuard` does not restore the mount. Check failure paths, pending delays, mount restoration, and traced-thread detachment.
+- For mount or process replacement changes, trace both `inject` and `resume` in `src/main.rs`. Recovery is explicit. Dropping `MountInjectionGuard` does not restore the mount. Check failure paths, pending delays, mount restoration, and traced-thread detachment. After successful mount restoration, directory cleanup is best effort: an absent directory is already clean; other removal failures are warnings and must preserve remaining contents.
 - For path changes, preserve the distinction between the backing path and the visible path. `HookFs` translates backing paths to the original visible paths before filtering. Check mount management and `src/utils.rs` for the same backing path convention. Open-file attributes must come from the backing descriptor after unlink or rename-overwrite. For GETATTR filters, prefer the newest tracked path whose backing device and inode still match that descriptor; fall back to the saved opening path when no candidate can be verified. Release the file and inode table locks before filesystem calls or injected delays.
 - For injector changes, preserve configuration order and first-error behavior in fallible hooks unless the task changes those contracts. `update` builds a complete replacement list before taking the write lock. Inspect lock scope and the affected FUSE call sites.
 - For configuration validation changes, account for current permissive behavior. Unknown method names are discarded, invalid glob patterns become unrestricted path filters, and `percent` is not range-checked. Changing these behaviors affects existing configurations.
@@ -69,6 +69,7 @@ Before running POSIX tests, prepare a disposable environment. These tests recurs
 | Rust formatting | `cargo fmt --all -- --check` | Checks `rustfmt.toml` rules. Needs the pinned toolchain's rustfmt component. |
 | RPC handling | `cargo test --locked --test jsonrpc_test` | Tests handlers without mounting FUSE. Still compiles the Linux-specific library. |
 | Filesystem behavior | `cargo test --locked --verbose -- --test-threads=1` | Runs the full suite, including real FUSE mounts. Requires the POSIX test setup above. |
+| Mount recovery | `cargo test --locked --test mount_injector_test -- --ignored --test-threads=1` | Tests mount rollback and empty or nonempty backing-directory cleanup in private mount namespaces. Requires Linux, `CAP_SYS_ADMIN`, `/dev/fuse`, `unshare`, and the FUSE setup above. |
 | Injector behavior | Test the affected hook through a real configured injection. | The existing RPC and POSIX tests do not demonstrate that configured faults take effect. |
 | CLI, mount, or process replacement | Run an injection and recovery cycle in the target PID and mount namespaces. | Check baseline I/O, the configured fault, rule updates or clearing, and restored I/O after SIGINT or SIGTERM. Exercise existing descriptors, working directories, or mappings affected by the change. |
 | Documentation only | Check paths, commands, and JSON examples against the source. Run `git diff --check`. | Does not require a runtime build. Do not install a toolchain or change host mount settings just to check prose. |
