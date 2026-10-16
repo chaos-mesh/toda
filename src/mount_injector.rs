@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use nix::mount::umount;
 use retry::delay::Fixed;
 use retry::{retry, OperationResult};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::injector::{InjectorConfig, MultiInjector};
 use crate::{hookfs, mount};
@@ -66,12 +66,22 @@ impl MountInjectionGuard {
 
         if mounts.non_root(&original_path)? {
             // TODO: make the parent mount points private before move mount points
-            mounts.move_mount(new_path, original_path)?;
+            mounts.move_mount(&new_path, original_path)?;
+            if let Err(error) = remove_backing_directory(&new_path) {
+                warn!(path = %new_path.display(), %error, "could not remove backing directory");
+            }
         } else {
             return Err(anyhow!("inject on a root mount"));
         }
 
         Ok(())
+    }
+}
+
+fn remove_backing_directory(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
     }
 }
 
@@ -167,5 +177,26 @@ impl MountInjector {
             original_path: self.original_path.clone(),
             new_path: self.new_path.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn missing_backing_directory_is_already_clean() -> std::io::Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "toda-cleanup-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!path.exists());
+        remove_backing_directory(&path)
     }
 }

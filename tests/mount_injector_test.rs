@@ -13,54 +13,13 @@ use toda::mount_injector::MountInjector;
 #[test]
 #[ignore = "requires Linux CAP_SYS_ADMIN, unshare, and /dev/fuse in a disposable environment"]
 fn fuse_mount_failure_restores_original_mount_and_io() -> Result<()> {
-    const TEST_NAME: &str = "fuse_mount_failure_restores_original_mount_and_io";
-    const TEST_ROOT: &str = "TODA_MOUNT_ROLLBACK_TEST_ROOT";
-    const PARENT_NAMESPACE: &str = "TODA_MOUNT_ROLLBACK_PARENT_NAMESPACE";
+    in_mount_namespace(
+        "fuse_mount_failure_restores_original_mount_and_io",
+        verify_mount_failure_rollback,
+    )
+}
 
-    let root = match std::env::var_os(TEST_ROOT) {
-        Some(root) => {
-            assert_ne!(
-                fs::read_link("/proc/self/ns/mnt")?,
-                PathBuf::from(std::env::var_os(PARENT_NAMESPACE).unwrap()),
-                "mount changes must run in a separate mount namespace"
-            );
-            PathBuf::from(root)
-        }
-        None => {
-            let root = std::env::temp_dir().join(format!(
-                "toda-mount-rollback-{}-{}",
-                std::process::id(),
-                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-            ));
-            let namespace = fs::read_link("/proc/self/ns/mnt")?;
-            let executable = std::env::current_exe()?;
-            fs::create_dir(&root)?;
-            let output = Command::new("unshare")
-                .args(["--mount", "--propagation", "private"])
-                .arg(executable)
-                .args([
-                    "--ignored",
-                    "--exact",
-                    TEST_NAME,
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(TEST_ROOT, &root)
-                .env(PARENT_NAMESPACE, namespace)
-                .output();
-            fs::remove_dir_all(&root)?;
-            let output = output.context("run regression in a private mount namespace")?;
-            assert!(
-                output.status.success(),
-                "namespace test failed with {}\nstdout:\n{}\nstderr:\n{}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            return Ok(());
-        }
-    };
-
+fn verify_mount_failure_rollback(root: &Path) -> Result<()> {
     let target = root.join("target");
     let backing = root.join("__chaosfs__target__");
     fs::create_dir(&target)?;
@@ -134,6 +93,131 @@ fn fuse_mount_failure_restores_original_mount_and_io() -> Result<()> {
     fs::write(&new_file, b"updated contents")?;
     assert_eq!(fs::read(&new_file)?, b"updated contents");
     assert_eq!(fs::metadata(&new_file)?.dev(), original_device);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Linux CAP_SYS_ADMIN, unshare, and /dev/fuse in a disposable environment"]
+fn recovery_removes_empty_backing_directory() -> Result<()> {
+    in_mount_namespace("recovery_removes_empty_backing_directory", |root| {
+        verify_recovery_cleanup(root, false)
+    })
+}
+
+#[test]
+#[ignore = "requires Linux CAP_SYS_ADMIN, unshare, and /dev/fuse in a disposable environment"]
+fn recovery_preserves_nonempty_backing_directory() -> Result<()> {
+    in_mount_namespace("recovery_preserves_nonempty_backing_directory", |root| {
+        verify_recovery_cleanup(root, true)
+    })
+}
+
+fn verify_recovery_cleanup(root: &Path, nonempty_backing: bool) -> Result<()> {
+    let target = root.join("target");
+    let backing = root.join("__chaosfs__target__");
+    fs::create_dir(&target)?;
+    mount::<str, _, str, str>(
+        Some("tmpfs"),
+        &target,
+        Some("tmpfs"),
+        MsFlags::empty(),
+        None,
+    )?;
+    let original_mount_id = mount_at(&target)?.expect("tmpfs is mounted").mnt_id;
+    let original_device = fs::metadata(&target)?.dev();
+    let file_path = target.join("existing");
+    fs::write(&file_path, b"original contents")?;
+    let mut held_file = OpenOptions::new().read(true).write(true).open(&file_path)?;
+    let original_file = held_file.metadata()?;
+    if nonempty_backing {
+        fs::create_dir(&backing)?;
+        fs::write(backing.join("keep"), b"pre-existing contents")?;
+    }
+
+    let mut injection = MountInjector::create_injection(&target, vec![])?;
+    let guard = injection.mount()?;
+    guard.enable_injection();
+    assert!(backing.is_dir());
+    assert_eq!(fs::read(&file_path)?, b"original contents");
+    fs::write(&file_path, b"through FUSE")?;
+    let waiting = PathBuf::from(format!(
+        "/sys/fs/fuse/connections/{}/waiting",
+        nix::sys::stat::minor(fs::metadata(&target)?.dev())
+    ));
+    guard.disable_injection();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while fs::read_to_string(&waiting)?.trim() != "0" {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "FUSE replies did not drain"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    guard.recover_mount()?;
+
+    assert_eq!(
+        mount_at(&target)?.map(|entry| entry.mnt_id),
+        Some(original_mount_id)
+    );
+    assert_eq!(fs::metadata(&target)?.dev(), original_device);
+    assert!(mount_at(&backing)?.is_none(), "backing mount remains");
+    assert_eq!(fs::metadata(&file_path)?.ino(), original_file.ino());
+    assert_eq!(fs::read(&file_path)?, b"through FUSE");
+    fs::write(&file_path, b"restored contents")?;
+    held_file.seek(SeekFrom::Start(0))?;
+    let mut contents = String::new();
+    held_file.read_to_string(&mut contents)?;
+    assert_eq!(contents, "restored contents");
+    if nonempty_backing {
+        assert_eq!(fs::read(backing.join("keep"))?, b"pre-existing contents");
+    } else {
+        assert!(
+            !backing.exists(),
+            "empty backing directory remains after recovery"
+        );
+    }
+    Ok(())
+}
+
+fn in_mount_namespace(test_name: &str, test: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    const TEST_ROOT: &str = "TODA_MOUNT_TEST_ROOT";
+    const PARENT_NAMESPACE: &str = "TODA_MOUNT_PARENT_NAMESPACE";
+    if let Some(root) = std::env::var_os(TEST_ROOT) {
+        assert_ne!(
+            fs::read_link("/proc/self/ns/mnt")?,
+            PathBuf::from(std::env::var_os(PARENT_NAMESPACE).unwrap()),
+            "mount changes must run in a separate mount namespace"
+        );
+        return test(Path::new(&root));
+    }
+    let root = std::env::temp_dir().join(format!(
+        "toda-mount-test-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    ));
+    fs::create_dir(&root)?;
+    let output = Command::new("unshare")
+        .args(["--mount", "--propagation", "private"])
+        .arg(std::env::current_exe()?)
+        .args([
+            "--ignored",
+            "--exact",
+            test_name,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(TEST_ROOT, &root)
+        .env(PARENT_NAMESPACE, fs::read_link("/proc/self/ns/mnt")?)
+        .output();
+    fs::remove_dir_all(&root)?;
+    let output = output.context("run regression in a private mount namespace")?;
+    assert!(
+        output.status.success(),
+        "namespace test failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 

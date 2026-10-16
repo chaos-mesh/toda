@@ -104,6 +104,8 @@ The [latency example](config-examples/latency-example.json) and [data corruption
 
 Send `SIGINT` with Ctrl+C, or send `SIGTERM`, to start recovery. toda interrupts pending delays and attempts to restore process references, unmount FUSE, and move the backing mount to its original location. `--mount-only` also skips process replacement during recovery. `SIGKILL` bypasses this recovery path.
 
+After successful recovery, toda attempts to remove the empty backing directory. A directory that is already absent needs no cleanup. Other cleanup failures produce a warning without failing mount recovery or deleting remaining contents.
+
 If FUSE mounting fails after toda moves the target mount, toda attempts to move it back before returning the setup error. If restoration also fails, the error reports both failures and the mount paths.
 
 ## Develop and test
@@ -132,13 +134,13 @@ cargo test --locked --verbose -- --test-threads=1
 
 The POSIX tests cover filesystem operations, including access through open files after deletion or replacement by rename. The suite does not cover the full CLI injection and recovery flow.
 
-The mount rollback test is ignored by default. Run it in a disposable Linux environment with `CAP_SYS_ADMIN`, `/dev/fuse`, and the `unshare` command:
+The mount lifecycle tests are ignored by default. Run them in a disposable Linux environment with `CAP_SYS_ADMIN`, `/dev/fuse`, and the `unshare` command:
 
 ```sh
 cargo test --locked --test mount_injector_test -- --ignored --test-threads=1
 ```
 
-The test uses a private mount namespace to force FUSE mounting to fail. It checks that the original mount and file reads and writes recover. CI runs this test in a separate privileged step.
+The tests use private mount namespaces to check FUSE setup rollback and recovery with empty or nonempty backing directories. They verify that the original mount and file reads and writes recover. CI runs these tests in a separate privileged step.
 
 `make example` builds and starts a privileged Docker container that repeatedly reads and writes files through a volume at `/var/run/test`. It is a workload for manual testing. It does not start toda or configure injection automatically.
 
