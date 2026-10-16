@@ -105,7 +105,7 @@ fn inject(option: Options, injector_config: Vec<InjectorConfig>) -> Result<Mount
 }
 
 #[instrument(skip(option, mount_guard))]
-fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
+fn resume(option: Options, mut mount_guard: MountInjectionGuard) -> Result<()> {
     info!("disable injection");
     mount_guard.disable_injection();
 
@@ -128,8 +128,18 @@ fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
     };
 
     info!("recovering mount");
-    mount_guard.recover_mount()?;
-
+    if let Err(_err) = mount_guard.recover_mount() {
+        info!("Recover mount failed, re-running replacer and retrying...");
+        let mut replacer = UnionReplacer::default();
+        replacer.prepare(&path, &new_path)?;
+        info!("running replacer again");
+        let result = replacer.run();
+        info!("replacer second result: {:?}", result);
+        if let Err(err) = mount_guard.recover_mount() {
+            info!("Recover mount failed again...");
+            return Err(err);
+        }
+    }
     info!("replacers detached");
     info!("recover successfully");
 
