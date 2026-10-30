@@ -1,5 +1,7 @@
 FROM rust:1.99.1-bookworm
 
+ARG TARGETARCH
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG HTTPS_PROXY
@@ -14,6 +16,7 @@ WORKDIR /toda-build
 COPY . .
 
 ENV RUSTFLAGS="-C relro-level=full"
-RUN --mount=type=cache,target=/toda-build/target \
+RUN --mount=type=cache,id=toda-target-1.99.1-bookworm-${TARGETARCH},target=/toda-build/target,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --locked --release && cp target/release/toda /toda

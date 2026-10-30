@@ -8,18 +8,22 @@ toda moves the target mount to a sibling path and mounts a FUSE filesystem at th
 
 ## Requirements
 
-- Linux on x86-64. The process replacement code uses Linux `/proc`, `ptrace`, and x86-64 instructions.
+- Linux on x86-64 or AArch64. Process replacement requires native 64-bit target processes of the same architecture as toda.
 - FUSE support, access to `/dev/fuse`, and FUSE mount tools such as `fusermount3`.
 - Permission to move and mount filesystems and, unless `--mount-only` is set, trace the target processes.
 - The target processes' PID and mount namespaces. Enter those namespaces before starting toda. toda does not enter namespaces itself.
 
 Use an existing mount point as the target. An ordinary directory that is not a mount point cannot be moved with `MS_MOVE`. The target mount's propagation settings must permit the move.
 
+Replacing existing memory mappings requires kernel support for `mremap` with `MREMAP_DONTUNMAP` on regular file mappings. toda probes this capability at runtime and refuses unsupported mappings before replacing them. `--mount-only` skips process replacement and does not require this capability.
+
+Process replacement reopens regular-file and directory descriptors, including `O_PATH` descriptors. Other descriptor types, such as open FIFOs and devices, are rejected unless opened with `O_PATH`. Deleted file paths cannot be reopened. File mappings must be readable, page-aligned regular-file mappings with ordinary protection and sharing flags. Special, locked, huge-page, userfault, and other unrepresented mapping attributes are rejected. Private page contents, current protections, and shared mappings' writable capability are preserved for supported mappings. Reopened descriptors retain their offset, status flags, and `FD_CLOEXEC`; shared open-file-description relationships are not preserved.
+
 ## Build
 
 The repository pins stable Rust to `1.99.1` in [rust-toolchain](rust-toolchain). Keep this toolchain when building the current source.
 
-On a Linux x86-64 system with Rust installed through rustup, install the native dependencies and build:
+On a Linux x86-64 or AArch64 system with Rust installed through rustup, install the native dependencies and build:
 
 ```sh
 sudo apt-get update
@@ -35,7 +39,15 @@ To build with Docker and copy the binary to `./toda`, run:
 make release
 ```
 
-This target builds the `chaos-mesh/toda` image using the [Dockerfile](Dockerfile), then copies `/toda` out of the image. `make image` builds the image without copying the binary. The Make targets explicitly build and run Linux x86-64 containers. Docker on another architecture needs support for running those containers. The image uses Debian 12 and Rust 1.99.1.
+This target builds the `chaos-mesh/toda` image using the [Dockerfile](Dockerfile), then copies `/toda` out of the image. `make image` builds the image without copying the binary. Both targets default to `ARCH=amd64`. To build an AArch64 binary, run:
+
+```sh
+make release ARCH=arm64
+```
+
+`ARCH` accepts `amd64` or `arm64` and also selects the platform for `make example`. Docker must support running Linux containers for the selected architecture. The image uses Debian 12 and Rust 1.99.1. BuildKit shares Cargo dependency caches and keeps a separate build cache for each architecture.
+
+The release workflow publishes `toda-linux-amd64.tar.gz` and `toda-linux-arm64.tar.gz`. Each archive contains a binary named `toda`.
 
 The Docker-built binary requires glibc 2.34 or newer. To run on a system with an older glibc, build natively on that system with the pinned toolchain.
 
@@ -104,6 +116,8 @@ The [latency example](config-examples/latency-example.json) and [data corruption
 
 Send `SIGINT` with Ctrl+C, or send `SIGTERM`, to start recovery. toda interrupts pending delays and attempts to restore process references, unmount FUSE, and move the backing mount to its original location. `--mount-only` also skips process replacement during recovery. `SIGKILL` bypasses this recovery path.
 
+If setup or recovery fails, toda retains the mount and stopped-process state needed to finish safely. Send `SIGINT` or `SIGTERM` to roll back failed setup or retry incomplete recovery. Resolve the reported underlying error before retrying. Targets are released only after their references and the mount are ready. This does not provide recovery after toda itself is forcibly terminated.
+
 After successful recovery, toda attempts to remove the empty backing directory. A directory that is already absent needs no cleanup. Other cleanup failures produce a warning without failing mount recovery or deleting remaining contents.
 
 If FUSE mounting fails after toda moves the target mount, toda attempts to move it back before returning the setup error. If restoration also fails, the error reports both failures and the mount paths.
@@ -126,7 +140,7 @@ mountpoint -q /sys/fs/fuse/connections || sudo mount -t fusectl fusectl /sys/fs/
 
 Tests use its [pending-request counter](https://www.kernel.org/doc/html/latest/filesystems/fuse/fuse.html#control-filesystem) to finish replies before unmounting.
 
-Run the full suite serially, as CI does:
+Run the full suite serially, as CI does on native x86-64 and AArch64 runners:
 
 ```sh
 cargo test --locked --verbose -- --test-threads=1
@@ -141,6 +155,8 @@ cargo test --locked --test mount_injector_test -- --ignored --test-threads=1
 ```
 
 The tests use private mount namespaces to check FUSE setup rollback and recovery with empty or nonempty backing directories. They verify that the original mount and file reads and writes recover. CI runs these tests in a separate privileged step.
+
+CI also builds and runs Clippy on both architectures. These checks do not prove process replacement works. To verify replacement, run an injection and recovery cycle in the target PID and mount namespaces on each architecture. Check existing descriptors, working directories, and mappings before injection, with an active rule, and after recovery. User-mode CPU emulation does not provide native `ptrace` behavior for this check.
 
 `make example` builds and starts a privileged Docker container that repeatedly reads and writes files through a volume at `/var/run/test`. It is a workload for manual testing. It does not start toda or configure injection automatically.
 

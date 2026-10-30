@@ -10,16 +10,39 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - name: Build
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           make release
-          tar -czvf toda-linux-amd64.tar.gz toda
+          tar -czvf "toda-linux-$ARCH.tar.gz" toda
+      - uses: actions/upload-artifact@v7
+        with:
+          name: toda-linux-${{ matrix.arch }}
+          path: toda-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: toda-linux-*
+          merge-multiple: true
       - name: Create release and upload binary
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" toda-linux-amd64.tar.gz --verify-tag --title "$RELEASE_TAG" --notes ""
+        run: gh release create "$RELEASE_TAG" toda-linux-amd64.tar.gz toda-linux-arm64.tar.gz --verify-tag --title "$RELEASE_TAG" --notes ""
