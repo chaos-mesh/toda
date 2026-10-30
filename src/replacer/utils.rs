@@ -4,11 +4,5 @@ use procfs::process::{self, Process};
 pub fn all_processes() -> Result<impl Iterator<Item = Process>> {
     Ok(process::all_processes()?
         .filter_map(|process| process.ok())
-        .filter(|process| -> bool {
-            if let Ok(cmdline) = process.cmdline() {
-                !cmdline.iter().any(|stat| stat.contains("toda"))
-            } else {
-                true
-            }
-        }))
+        .filter(|process| process.pid != std::process::id() as i32))
 }

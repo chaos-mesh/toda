@@ -1,395 +1,700 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeMap;
+use std::convert::TryInto;
 use std::ffi::CString;
-use std::io::IoSlice;
+use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
-use nix::errno::Errno;
-use nix::sys::mman::{MapFlags, ProtFlags};
-use nix::sys::signal::Signal;
-use nix::sys::uio::{process_vm_writev, RemoteIoVec};
-use nix::sys::{ptrace, wait};
-use nix::unistd::Pid;
-use procfs::process::Task;
-use procfs::ProcError;
-use retry::delay::Fixed;
-use retry::OperationResult;
-use tracing::{info, instrument, trace, warn};
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use procfs::process::{MMPermissions, Process};
 
-// There should be only one PtraceManager in one thread. But as we don't implement TLS
-// , we cannot use thread-local variables safely.
-#[derive(Debug, Default)]
-pub struct PtraceManager {
-    counter: RefCell<HashMap<i32, i32>>,
-}
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+compile_error!("toda process replacement requires Linux aarch64 or x86_64");
+mod arch;
 
-thread_local! {
-    static PTRACE_MANAGER: PtraceManager = PtraceManager::default()
-}
-
-pub fn trace(pid: i32) -> Result<TracedProcess> {
-    PTRACE_MANAGER.with(|pm| pm.trace(pid))
-}
-
-fn thread_is_gone(state: char) -> bool {
-    // return true if the process is Zombie or Dead
-    state == 'Z' || state == 'x' || state == 'X'
-}
-
-#[instrument]
-fn attach_task(task: &Task) -> Result<()> {
-    let pid = Pid::from_raw(task.tid);
-    let process = procfs::process::Process::new(task.tid)?;
-    let state = process.stat()?.state;
-
-    trace!("attach task: {}", task.tid);
-    match ptrace::attach(pid) {
-        Err(errno) if errno == Errno::ESRCH || (errno == Errno::EPERM && thread_is_gone(state)) => {
-            info!("task {} doesn't exist, maybe has stopped", task.tid)
-        }
-        Err(err) => {
-            warn!("attach error: {:?}", err);
-            return Err(err.into());
-        }
-        _ => {}
+fn request(op: libc::c_uint, pid: i32, addr: usize, data: usize) -> Result<libc::c_long> {
+    unsafe {
+        *libc::__errno_location() = 0;
     }
-    info!("attach task: {} successfully", task.tid);
-
-    // TODO: check wait result
-    match wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL)) {
-        Ok(status) => {
-            info!("wait status: {:?}", status);
-        }
-        Err(err) => warn!("fail to wait for process({}): {:?}", pid, err),
+    let value = unsafe {
+        libc::ptrace(
+            op,
+            pid,
+            addr as *mut libc::c_void,
+            data as *mut libc::c_void,
+        )
     };
+    let error = std::io::Error::last_os_error();
+    if value == -1 && error.raw_os_error() != Some(0) {
+        return Err(error).with_context(|| format!("ptrace request {op:#x} for thread {pid}"));
+    }
+    Ok(value)
+}
 
+fn regset<T>(pid: i32, op: libc::c_uint, kind: usize, value: &mut T) -> Result<()> {
+    let mut io = libc::iovec {
+        iov_base: (value as *mut T).cast(),
+        iov_len: std::mem::size_of::<T>(),
+    };
+    request(op, pid, kind, &mut io as *mut _ as usize)?;
+    ensure!(
+        io.iov_len == std::mem::size_of::<T>(),
+        "unexpected register ABI for thread {pid}"
+    );
     Ok(())
 }
 
-impl PtraceManager {
-    #[instrument(skip(self))]
-    pub fn trace(&self, pid: i32) -> Result<TracedProcess> {
-        let raw_pid = pid;
-        let pid = Pid::from_raw(pid);
-
-        let mut counter_ref = self.counter.borrow_mut();
-        match counter_ref.get_mut(&raw_pid) {
-            Some(count) => *count += 1,
-            None => {
-                trace!("stop {} successfully", pid);
-
-                let mut iterations = 2;
-                let mut traced_tasks = HashSet::<i32>::new();
-
-                while iterations > 0 {
-                    let mut new_threads_found = false;
-                    let process = procfs::process::Process::new(raw_pid)?;
-                    for task in process.tasks()?.flatten() {
-                        if traced_tasks.contains(&task.tid) {
-                            continue;
-                        }
-
-                        if let Ok(()) = attach_task(&task) {
-                            trace!("newly traced task: {}", task.tid);
-                            new_threads_found = true;
-                            traced_tasks.insert(task.tid);
-                        }
-                    }
-
-                    if !new_threads_found {
-                        iterations -= 1;
-                    }
-                }
-
-                info!("trace process: {} successfully", pid);
-                counter_ref.insert(raw_pid, 1);
-            }
-        }
-
-        Ok(TracedProcess { pid: raw_pid })
+fn gone(pid: i32) -> bool {
+    match Process::new(pid).and_then(|p| p.stat()) {
+        Ok(stat) => matches!(stat.state, 'Z' | 'X' | 'x'),
+        Err(procfs::ProcError::NotFound(_)) => true,
+        Err(_) => false,
     }
+}
 
-    #[instrument(skip(self))]
-    pub fn detach(&self, pid: i32) -> Result<()> {
-        let mut counter_ref = self.counter.borrow_mut();
-        match counter_ref.get_mut(&pid) {
-            Some(count) => {
-                *count -= 1;
-                trace!("decrease counter to {}", *count);
-                if *count < 1 {
-                    counter_ref.remove(&pid);
-
-                    info!("detach process: {}", pid);
-                    if let Err(err) = retry::retry::<_, _, _, anyhow::Error, _>(
-                        Fixed::from_millis(500).take(20),
-                        || match procfs::process::Process::new(pid) {
-                            Err(ProcError::NotFound(_)) => {
-                                info!("process {} not found", pid);
-                                OperationResult::Ok(())
-                            }
-                            Err(err) => {
-                                warn!("fail to detach task: {}, retry", pid);
-                                OperationResult::Retry(err.into())
-                            }
-                            Ok(process) => match process.tasks() {
-                                Err(err) => OperationResult::Retry(err.into()),
-                                Ok(tasks) => {
-                                    for task in tasks.flatten() {
-                                        match ptrace::detach(Pid::from_raw(task.tid), None) {
-                                                Ok(()) => {
-                                                    info!("successfully detached task: {}", task.tid);
-                                                }
-                                                Err(Errno::ESRCH) => trace!(
-                                                    "task {} doesn't exist, maybe has stopped or not traced",
-                                                    task.tid
-                                                ),
-                                                Err(err) => {
-                                                    warn!("fail to detach: {:?}", err)
-                                                },
-                                            }
-                                        trace!("detach task: {} successfully", task.tid);
-                                    }
-                                    info!("detach process: {} successfully", pid);
-                                    OperationResult::Ok(())
-                                }
-                            },
-                        },
-                    ) {
-                        warn!("fail to detach: {:?}", err);
-                        return Err(err.error);
-                    };
-                }
-
-                Ok(())
-            }
-            None => Err(anyhow::anyhow!("haven't traced this process")),
+fn wait_stop(pid: i32) -> Result<i32> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::__WALL | libc::WNOHANG) };
+        if result == pid {
+            ensure!(
+                libc::WIFSTOPPED(status),
+                "thread {pid} exited while traced (status {status:#x})"
+            );
+            return Ok(status);
         }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "timed out waiting for stopped thread {pid}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
 #[derive(Debug)]
-pub struct TracedProcess {
-    pub pid: i32,
+struct Thread {
+    stopped: bool,
+    signal: i32,
 }
 
-impl Clone for TracedProcess {
-    fn clone(&self) -> Self {
-        // TODO: handler error here
-        PTRACE_MANAGER.with(|pm| pm.trace(self.pid)).unwrap()
-    }
+#[derive(Debug)]
+struct Patch {
+    words: Vec<(u64, u64)>,
 }
 
-impl TracedProcess {
-    #[instrument]
-    fn protect(&self) -> Result<ThreadGuard> {
-        let regs = ptrace::getregs(Pid::from_raw(self.pid))?;
-
-        let rip = regs.rip;
-        trace!("protecting regs: {:?}", regs);
-        let rip_ins = ptrace::read(Pid::from_raw(self.pid), rip as *mut libc::c_void)?;
-
-        let guard = ThreadGuard {
-            tid: self.pid,
-            regs,
-            rip_ins,
-        };
-        Ok(guard)
+impl Patch {
+    fn read(pid: i32, address: u64) -> Result<Self> {
+        let mut patch = Self { words: Vec::new() };
+        let end = address + arch::SYSCALL.len() as u64;
+        for base in ((address & !7)..((end + 7) & !7)).step_by(8) {
+            let original = request(libc::PTRACE_PEEKDATA, pid, base as usize, 0)? as u64;
+            patch.words.push((base, original));
+        }
+        Ok(patch)
     }
 
-    #[instrument(skip(f))]
-    fn with_protect<R, F: Fn(&Self) -> Result<R>>(&self, f: F) -> Result<R> {
-        let guard = self.protect()?;
-
-        let ret = f(self)?;
-
-        drop(guard);
-
-        Ok(ret)
-    }
-
-    #[instrument]
-    fn syscall(&self, id: u64, args: &[u64]) -> Result<u64> {
-        trace!("run syscall {} {:?}", id, args);
-
-        self.with_protect(|thread| -> Result<u64> {
-            let pid = Pid::from_raw(thread.pid);
-
-            let mut regs = ptrace::getregs(pid)?;
-            let cur_ins_ptr = regs.rip;
-
-            regs.rax = id;
-            for (index, arg) in args.iter().enumerate() {
-                // All these registers are hard coded for x86 platform
-                if index == 0 {
-                    regs.rdi = *arg
-                } else if index == 1 {
-                    regs.rsi = *arg
-                } else if index == 2 {
-                    regs.rdx = *arg
-                } else if index == 3 {
-                    regs.r10 = *arg
-                } else if index == 4 {
-                    regs.r8 = *arg
-                } else if index == 5 {
-                    regs.r9 = *arg
-                } else {
-                    return Err(anyhow!("too many arguments for a syscall"));
+    fn install(&self, pid: i32, address: u64) -> Result<()> {
+        for &(base, original) in &self.words {
+            let mut bytes = original.to_ne_bytes();
+            for (i, byte) in arch::SYSCALL.iter().enumerate() {
+                let at = address + i as u64;
+                if (base..base + 8).contains(&at) {
+                    bytes[(at - base) as usize] = *byte;
                 }
             }
-            trace!("setting regs for pid: {:?}, regs: {:?}", pid, regs);
-            ptrace::setregs(pid, regs)?;
-
-            // We only support x86-64 platform now, so using hard coded `LittleEndian` here is ok.
-            ptrace::write(pid, cur_ins_ptr as *mut libc::c_void, 0x050f)?;
-            ptrace::step(pid, None)?;
-
-            loop {
-                let status = wait::waitpid(pid, None)?;
-                info!("wait status: {:?}", status);
-                match status {
-                    wait::WaitStatus::Stopped(_, Signal::SIGTRAP) => break,
-                    _ => ptrace::step(pid, None)?,
-                }
-            }
-
-            let regs = ptrace::getregs(pid)?;
-
-            trace!("returned: {:?}", regs.rax);
-
-            Ok(regs.rax)
-        })
-    }
-
-    #[instrument]
-    pub fn mmap(&self, length: u64, fd: u64) -> Result<u64> {
-        let prot = ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC;
-        let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANON;
-
-        self.syscall(
-            9,
-            &[0, length, prot.bits() as u64, flags.bits() as u64, fd, 0],
-        )
-    }
-
-    #[instrument]
-    pub fn munmap(&self, addr: u64, len: u64) -> Result<u64> {
-        self.syscall(11, &[addr, len])
-    }
-
-    #[instrument(skip(f))]
-    pub fn with_mmap<R, F: Fn(&Self, u64) -> Result<R>>(&self, len: u64, f: F) -> Result<R> {
-        let addr = self.mmap(len, 0)?;
-
-        let ret = f(self, addr)?;
-
-        self.munmap(addr, len)?;
-
-        Ok(ret)
-    }
-
-    #[instrument]
-    pub fn chdir<P: AsRef<Path> + std::fmt::Debug>(&self, filename: P) -> Result<()> {
-        let filename = CString::new(filename.as_ref().as_os_str().as_bytes())?;
-        let path = filename.as_bytes_with_nul();
-
-        self.with_mmap(path.len() as u64, |process, addr| {
-            process.write_mem(addr, path)?;
-
-            self.syscall(80, &[addr])?;
-            Ok(())
-        })
-    }
-
-    #[instrument]
-    pub fn write_mem(&self, addr: u64, content: &[u8]) -> Result<()> {
-        let pid = Pid::from_raw(self.pid);
-
-        process_vm_writev(
-            pid,
-            &[IoSlice::new(content)],
-            &[RemoteIoVec {
-                base: addr as usize,
-                len: content.len(),
-            }],
-        )?;
-
+            request(
+                libc::PTRACE_POKEDATA,
+                pid,
+                base as usize,
+                u64::from_ne_bytes(bytes) as usize,
+            )?;
+        }
         Ok(())
     }
 
-    #[instrument(skip(codes))]
-    pub fn run_codes<F: Fn(u64) -> Result<(u64, Vec<u8>)>>(&self, codes: F) -> Result<()> {
-        let pid = Pid::from_raw(self.pid);
-
-        let regs = ptrace::getregs(pid)?;
-        let (_, ins) = codes(regs.rip)?; // generate codes to get length
-
-        self.with_mmap(ins.len() as u64 + 16, |_, addr| {
-            self.with_protect(|_| {
-                let (offset, ins) = codes(addr)?; // generate codes
-
-                let end_addr = addr + ins.len() as u64;
-                trace!("write instructions to addr: {:X}-{:X}", addr, end_addr);
-                self.write_mem(addr, &ins)?;
-
-                let mut regs = ptrace::getregs(pid)?;
-                trace!("modify rip to addr: {:X}", addr + offset);
-                regs.rip = addr + offset;
-                ptrace::setregs(pid, regs)?;
-
-                let regs = ptrace::getregs(pid)?;
-                info!("current registers: {:?}", regs);
-
-                loop {
-                    info!("run instructions");
-                    ptrace::cont(pid, None)?;
-
-                    info!("wait for pid: {:?}", pid);
-                    let status = wait::waitpid(pid, None)?;
-                    info!("wait status: {:?}", status);
-
-                    use nix::sys::signal::SIGTRAP;
-                    let regs = ptrace::getregs(pid)?;
-
-                    info!("current registers: {:?}", regs);
-                    match status {
-                        wait::WaitStatus::Stopped(_, SIGTRAP) => {
-                            break;
-                        }
-                        _ => info!("continue running replacers"),
-                    }
-                }
-                Ok(())
-            })
-        })
-    }
-}
-
-impl Drop for TracedProcess {
-    fn drop(&mut self) {
-        trace!("dropping traced process: {}", self.pid);
-
-        if let Err(err) = PTRACE_MANAGER.with(|pm| pm.detach(self.pid)) {
-            info!(
-                "detaching process {} failed with error: {:?}",
-                self.pid, err
-            )
+    fn restore(&self, pid: i32) -> Result<()> {
+        for &(address, word) in &self.words {
+            request(libc::PTRACE_POKEDATA, pid, address as usize, word as usize)?;
         }
+        Ok(())
     }
 }
 
 #[derive(Debug)]
-struct ThreadGuard {
-    tid: i32,
-    regs: libc::user_regs_struct,
-    rip_ins: i64,
+enum Resume {
+    Initial,
+    Entry {
+        registers: Box<arch::Registers>,
+        number: u64,
+    },
 }
 
-impl Drop for ThreadGuard {
-    fn drop(&mut self) {
-        let pid = Pid::from_raw(self.tid);
-        ptrace::write(pid, self.regs.rip as *mut libc::c_void, self.rip_ins).unwrap();
-        ptrace::setregs(pid, self.regs).unwrap();
+#[derive(Debug, PartialEq)]
+enum Restoration {
+    Pending,
+    ExecutionRestored,
+    Complete,
+}
+
+#[derive(Debug)]
+struct Runner {
+    initial: arch::Registers,
+    mask: u64,
+    resume: Resume,
+    site: u64,
+    patch: Option<Patch>,
+    ready: bool,
+    restoration: Restoration,
+}
+
+/// Owns every traced thread and any unfinished remote execution until explicit release.
+#[derive(Debug)]
+pub struct TracedProcess {
+    pub pid: i32,
+    threads: BTreeMap<i32, Thread>,
+    runner: Option<Runner>,
+    releasing: bool,
+    scratch: Vec<(u64, u64)>,
+    temporary_fds: Vec<u64>,
+    _main_thread: PhantomData<Rc<()>>,
+}
+
+impl TracedProcess {
+    pub(crate) fn new(pid: i32) -> Self {
+        Self {
+            pid,
+            threads: BTreeMap::new(),
+            runner: None,
+            releasing: false,
+            scratch: Vec::new(),
+            temporary_fds: Vec::new(),
+            _main_thread: PhantomData,
+        }
+    }
+
+    pub(crate) fn acquire(&mut self) -> Result<()> {
+        for _ in 0..32 {
+            let tids: Vec<_> = Process::new(self.pid)?
+                .tasks()?
+                .map(|t| t.map(|t| t.tid))
+                .collect::<std::result::Result<_, _>>()?;
+            for tid in tids {
+                if self.threads.contains_key(&tid) || gone(tid) {
+                    continue;
+                }
+                let options = libc::PTRACE_O_TRACESYSGOOD | libc::PTRACE_O_TRACECLONE;
+                if let Err(error) = request(libc::PTRACE_SEIZE, tid, 0, options as usize) {
+                    if gone(tid) {
+                        continue;
+                    }
+                    // A clone can be owned before its parent's clone event is consumed.
+                    let owned = Process::new(tid)?.status()?.tracerpid == std::process::id() as i32;
+                    if !owned {
+                        return Err(error);
+                    }
+                }
+                self.threads.insert(
+                    tid,
+                    Thread {
+                        stopped: false,
+                        signal: 0,
+                    },
+                );
+                if let Err(error) = request(libc::PTRACE_INTERRUPT, tid, 0, 0) {
+                    if !gone(tid)
+                        && error
+                            .downcast_ref::<std::io::Error>()
+                            .and_then(|e| e.raw_os_error())
+                            != Some(libc::EIO)
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+            let pending: Vec<_> = self
+                .threads
+                .iter()
+                .filter(|(_, t)| !t.stopped)
+                .map(|(&tid, _)| tid)
+                .collect();
+            for tid in pending {
+                if gone(tid) {
+                    self.threads.remove(&tid);
+                    continue;
+                }
+                let status = wait_stop(tid)?;
+                self.threads.get_mut(&tid).unwrap().stopped = true;
+                let event = status >> 16;
+                if event == libc::PTRACE_EVENT_CLONE {
+                    let mut child = 0u64;
+                    request(
+                        libc::PTRACE_GETEVENTMSG,
+                        tid,
+                        0,
+                        &mut child as *mut _ as usize,
+                    )?;
+                    self.threads.entry(child as i32).or_insert(Thread {
+                        stopped: false,
+                        signal: 0,
+                    });
+                }
+                ensure!(
+                    event == 0
+                        || event == libc::PTRACE_EVENT_STOP
+                        || event == libc::PTRACE_EVENT_CLONE,
+                    "unsupported ptrace event {event} for {tid}"
+                );
+                let thread = self.threads.get_mut(&tid).unwrap();
+                thread.stopped = true;
+                thread.signal = if event == 0 || libc::WSTOPSIG(status) != libc::SIGTRAP {
+                    libc::WSTOPSIG(status)
+                } else {
+                    0
+                };
+            }
+            if self.reconcile().is_ok() {
+                ensure!(
+                    self.threads.contains_key(&self.pid),
+                    "process leader disappeared"
+                );
+                return Ok(());
+            }
+        }
+        bail!("thread membership did not stabilize for {}", self.pid)
+    }
+
+    pub(crate) fn reconcile(&self) -> Result<()> {
+        for task in Process::new(self.pid)?.tasks()? {
+            let task = task?;
+            if gone(task.tid) {
+                continue;
+            }
+            let owned = self.threads.get(&task.tid).is_some_and(|t| t.stopped);
+            let status = Process::new(task.tid)?.status()?;
+            ensure!(
+                owned
+                    && status.tracerpid == std::process::id() as i32
+                    && status.state.starts_with('t'),
+                "live thread {} is not owned and stopped",
+                task.tid
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_runner(&mut self, excluded: &[(u64, u64)]) -> Result<()> {
+        self.reconcile()?;
+        let mut executable = std::fs::File::open(format!("/proc/{}/exe", self.pid))?;
+        let mut elf = [0u8; 20];
+        std::io::Read::read_exact(&mut executable, &mut elf)?;
+        #[cfg(target_arch = "aarch64")]
+        let machine = 183;
+        #[cfg(target_arch = "x86_64")]
+        let machine = 62;
+        ensure!(
+            &elf[..4] == b"\x7fELF"
+                && elf[4] == 2
+                && elf[5] == 1
+                && u16::from_le_bytes([elf[18], elf[19]]) == machine,
+            "only native 64-bit ELF targets are supported"
+        );
+        ensure!(
+            self.threads.values().all(|t| t.signal == 0),
+            "pending signal or group stop is unsupported during replacement"
+        );
+        let initial = arch::get(self.pid)?;
+        let pc = arch::pc(&initial);
+        let overlaps = |start: u64, end: u64| excluded.iter().any(|&(a, b)| start < b && a < end);
+        let site = Process::new(self.pid)?
+            .maps()?
+            .into_iter()
+            .find_map(|map| {
+                let start = (map.address.0 + 7) & !7;
+                (map.perms.contains(MMPermissions::EXECUTE)
+                    && map.perms.contains(MMPermissions::PRIVATE)
+                    && start + 8 <= map.address.1
+                    && !overlaps(start, start + 8))
+                .then_some(start)
+            })
+            .ok_or_else(|| anyhow!("no executable syscall bridge outside replacement mappings"))?;
+        let mut instruction = vec![0u8; arch::SYSCALL.len()];
+        self.read_memory(pc, &mut instruction)?;
+        let at_syscall = instruction == arch::SYSCALL;
+        let restarting = arch::restart_at_previous_instruction(&initial);
+        let mut syscall_info = [0u8; 88];
+        request(
+            libc::PTRACE_GET_SYSCALL_INFO,
+            self.pid,
+            syscall_info.len(),
+            syscall_info.as_mut_ptr() as usize,
+        )?;
+        let patch = Patch::read(self.pid, site)?;
+        let mask = arch::block_signals(self.pid)?;
+        self.runner = Some(Runner {
+            initial,
+            mask,
+            resume: Resume::Initial,
+            site,
+            patch: None,
+            ready: false,
+            restoration: Restoration::Pending,
+        });
+        if at_syscall || restarting {
+            let expected = if restarting {
+                pc
+            } else {
+                pc + arch::SYSCALL.len() as u64
+            };
+            self.advance()?;
+            let number = self.syscall_stop(1, expected)?;
+            let registers = arch::get(self.pid)?;
+            self.runner.as_mut().unwrap().resume = Resume::Entry {
+                registers: Box::new(registers),
+                number,
+            };
+            arch::substitute(self.pid, registers, libc::SYS_getpid as u64)?;
+            self.advance()?;
+            self.syscall_stop(2, expected)?;
+            ensure!(
+                arch::result(&arch::get(self.pid)?) == i64::from(self.pid),
+                "bootstrap getpid returned wrong process"
+            );
+        }
+        self.runner.as_mut().unwrap().ready = true;
+        self.runner.as_mut().unwrap().patch = Some(patch);
+        self.runner
+            .as_ref()
+            .unwrap()
+            .patch
+            .as_ref()
+            .unwrap()
+            .install(self.pid, site)?;
+        Ok(())
+    }
+
+    fn advance(&mut self) -> Result<()> {
+        request(libc::PTRACE_SYSCALL, self.pid, 0, 0)?;
+        self.threads.get_mut(&self.pid).unwrap().stopped = false;
+        let status = match wait_stop(self.pid) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = request(libc::PTRACE_INTERRUPT, self.pid, 0, 0);
+                if wait_stop(self.pid).is_ok() {
+                    self.threads.get_mut(&self.pid).unwrap().stopped = true;
+                }
+                if let Some(runner) = &mut self.runner {
+                    runner.ready = false;
+                }
+                return Err(error);
+            }
+        };
+        self.threads.get_mut(&self.pid).unwrap().stopped = true;
+        if libc::WSTOPSIG(status) != (libc::SIGTRAP | 0x80) || status >> 16 != 0 {
+            if let Some(runner) = &mut self.runner {
+                runner.ready = false;
+            }
+            bail!(
+                "unexpected remote syscall stop {status:#x} for {}",
+                self.pid
+            );
+        }
+        Ok(())
+    }
+
+    fn syscall_stop(&mut self, op: u8, pc: u64) -> Result<u64> {
+        let result = self.inspect_syscall_stop(op, pc);
+        if result.is_err() {
+            if let Some(runner) = &mut self.runner {
+                runner.ready = false;
+            }
+        }
+        result
+    }
+
+    fn inspect_syscall_stop(&self, op: u8, pc: u64) -> Result<u64> {
+        let mut bytes = [0u8; 88];
+        let len = request(
+            libc::PTRACE_GET_SYSCALL_INFO,
+            self.pid,
+            bytes.len(),
+            bytes.as_mut_ptr() as usize,
+        )?;
+        ensure!(
+            len >= if op == 1 { 80 } else { 33 } && bytes[0] == op,
+            "expected syscall stop {op}, got {} (length {len})",
+            bytes[0]
+        );
+        ensure!(
+            u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) == arch::AUDIT_ARCH,
+            "unexpected syscall ABI"
+        );
+        ensure!(
+            u64::from_ne_bytes(bytes[8..16].try_into().unwrap()) == pc
+                && arch::pc(&arch::get(self.pid)?) == pc,
+            "unexpected syscall program counter"
+        );
+        Ok(u64::from_ne_bytes(bytes[24..32].try_into().unwrap()))
+    }
+
+    fn syscall(&mut self, number: libc::c_long, args: [u64; 6]) -> Result<u64> {
+        let runner = self
+            .runner
+            .as_ref()
+            .ok_or_else(|| anyhow!("syscall runner is unprepared"))?;
+        ensure!(
+            runner.ready && runner.restoration == Restoration::Pending && !self.releasing,
+            "syscall runner requires recovery"
+        );
+        let mut regs = runner.initial;
+        let site = runner.site;
+        arch::set_pc(&mut regs, site);
+        arch::call(&mut regs, number as u64, args);
+        arch::set(self.pid, regs)?;
+        self.runner.as_mut().unwrap().ready = false;
+        arch::syscall_number(self.pid, -1)?;
+        self.advance()?;
+        ensure!(
+            self.syscall_stop(1, site + arch::SYSCALL.len() as u64)? == number as u64,
+            "unexpected remote syscall number"
+        );
+        self.advance()?;
+        self.syscall_stop(2, site + arch::SYSCALL.len() as u64)?;
+        self.runner.as_mut().unwrap().ready = true;
+        let result = arch::result(&arch::get(self.pid)?);
+        if (-4095..0).contains(&result) {
+            return Err(std::io::Error::from_raw_os_error(-result as i32))
+                .with_context(|| format!("remote syscall {number} in process {}", self.pid));
+        }
+        Ok(result as u64)
+    }
+
+    pub(crate) fn release(&mut self) -> Result<()> {
+        if self.threads.keys().all(|&tid| gone(tid)) {
+            self.threads.clear();
+            self.runner = None;
+            self.scratch.clear();
+            self.temporary_fds.clear();
+            return Ok(());
+        }
+        while let Some(&(address, length)) = self.scratch.last() {
+            self.unmap(address, length)?;
+            self.scratch.pop();
+        }
+        while let Some(&fd) = self.temporary_fds.last() {
+            self.close(fd)?;
+            self.temporary_fds.pop();
+        }
+        if let Some(runner) = &self.runner {
+            if runner.restoration == Restoration::Pending {
+                ensure!(
+                    runner.ready,
+                    "remote execution state remains uncertain for {}",
+                    self.pid
+                );
+                if let Some(patch) = &runner.patch {
+                    patch.restore(self.pid)?;
+                }
+                let initial = runner.initial;
+                match &runner.resume {
+                    Resume::Initial => {
+                        arch::set(self.pid, initial)?;
+                        arch::syscall_number(self.pid, -1)?;
+                    }
+                    Resume::Entry { registers, number } => {
+                        let registers = **registers;
+                        let number = *number;
+                        let pc = arch::pc(&registers);
+                        arch::set(self.pid, arch::replay(registers, &initial))?;
+                        arch::syscall_number(self.pid, -1)?;
+                        self.runner.as_mut().unwrap().ready = false;
+                        self.advance()?;
+                        ensure!(
+                            self.syscall_stop(1, pc)? == number,
+                            "restored syscall number differs"
+                        );
+                    }
+                }
+                self.runner.as_mut().unwrap().restoration = Restoration::ExecutionRestored;
+            }
+        }
+        if let Some(runner) = &mut self.runner {
+            if runner.restoration == Restoration::ExecutionRestored {
+                arch::restore_signals(self.pid, runner.mask)?;
+                runner.restoration = Restoration::Complete;
+            }
+        }
+        self.releasing = true;
+        let tids: Vec<_> = self.threads.keys().copied().collect();
+        for tid in tids {
+            if gone(tid) {
+                self.threads.remove(&tid);
+                continue;
+            }
+            if !self.threads[&tid].stopped {
+                let _ = request(libc::PTRACE_INTERRUPT, tid, 0, 0);
+                let status = wait_stop(tid)?;
+                ensure!(
+                    status >> 16 == libc::PTRACE_EVENT_STOP,
+                    "unexpected stop while releasing thread {tid}"
+                );
+                self.threads.get_mut(&tid).unwrap().stopped = true;
+            }
+            let thread = &self.threads[&tid];
+            request(libc::PTRACE_DETACH, tid, 0, thread.signal as usize)?;
+            self.threads.remove(&tid);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_gone(&self) -> bool {
+        self.threads.keys().all(|&tid| gone(tid))
+    }
+
+    pub(crate) fn is_released(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    pub fn read_memory(&self, address: u64, bytes: &mut [u8]) -> Result<()> {
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let local = libc::iovec {
+                iov_base: bytes[offset..].as_mut_ptr().cast(),
+                iov_len: bytes.len() - offset,
+            };
+            let remote = libc::iovec {
+                iov_base: (address + offset as u64) as *mut _,
+                iov_len: local.iov_len,
+            };
+            let read = unsafe { libc::process_vm_readv(self.pid, &local, 1, &remote, 1, 0) };
+            ensure!(
+                read > 0,
+                "read remote memory at {:#x}: {}",
+                address + offset as u64,
+                std::io::Error::last_os_error()
+            );
+            offset += read as usize;
+        }
+        Ok(())
+    }
+
+    pub fn write_mem(&self, address: u64, bytes: &[u8]) -> Result<()> {
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let local = libc::iovec {
+                iov_base: bytes[offset..].as_ptr() as *mut _,
+                iov_len: bytes.len() - offset,
+            };
+            let remote = libc::iovec {
+                iov_base: (address + offset as u64) as *mut _,
+                iov_len: local.iov_len,
+            };
+            let written = unsafe { libc::process_vm_writev(self.pid, &local, 1, &remote, 1, 0) };
+            ensure!(
+                written > 0,
+                "write remote memory at {:#x}: {}",
+                address + offset as u64,
+                std::io::Error::last_os_error()
+            );
+            offset += written as usize;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn open(&mut self, path: &Path, flags: i32) -> Result<u64> {
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        let bytes = path.as_bytes_with_nul();
+        let address = self.map(
+            bytes.len() as u64,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            u64::MAX,
+            0,
+        )?;
+        self.scratch.push((address, bytes.len() as u64));
+        self.write_mem(address, bytes)?;
+        let result = self.syscall(
+            libc::SYS_openat,
+            [libc::AT_FDCWD as u64, address, flags as u64, 0, 0, 0],
+        );
+        if let Ok(fd) = result {
+            self.temporary_fds.push(fd);
+        }
+        self.unmap(address, bytes.len() as u64)?;
+        self.scratch.pop();
+        if result.is_ok() {
+            self.temporary_fds.pop();
+        }
+        result
+    }
+
+    pub(crate) fn close(&mut self, fd: u64) -> Result<()> {
+        self.syscall(libc::SYS_close, [fd, 0, 0, 0, 0, 0])
+            .map(|_| ())
+    }
+    pub(crate) fn fcntl(&mut self, fd: u64, op: i32, arg: u64) -> Result<u64> {
+        self.syscall(libc::SYS_fcntl, [fd, op as u64, arg, 0, 0, 0])
+    }
+    pub(crate) fn seek(&mut self, fd: u64, offset: u64, whence: i32) -> Result<u64> {
+        self.syscall(libc::SYS_lseek, [fd, offset, whence as u64, 0, 0, 0])
+    }
+    pub(crate) fn duplicate_to(&mut self, from: u64, to: u64, cloexec: bool) -> Result<()> {
+        self.syscall(
+            libc::SYS_dup3,
+            [
+                from,
+                to,
+                if cloexec { libc::O_CLOEXEC as u64 } else { 0 },
+                0,
+                0,
+                0,
+            ],
+        )
+        .map(|_| ())
+    }
+    pub(crate) fn fchdir(&mut self, fd: u64) -> Result<()> {
+        self.syscall(libc::SYS_fchdir, [fd, 0, 0, 0, 0, 0])
+            .map(|_| ())
+    }
+    pub(crate) fn map(
+        &mut self,
+        length: u64,
+        prot: i32,
+        flags: i32,
+        fd: u64,
+        offset: u64,
+    ) -> Result<u64> {
+        self.syscall(
+            libc::SYS_mmap,
+            [0, length, prot as u64, flags as u64, fd, offset],
+        )
+    }
+    pub(crate) fn unmap(&mut self, address: u64, length: u64) -> Result<()> {
+        self.syscall(libc::SYS_munmap, [address, length, 0, 0, 0, 0])
+            .map(|_| ())
+    }
+    pub(crate) fn protect(&mut self, address: u64, length: u64, prot: i32) -> Result<()> {
+        self.syscall(libc::SYS_mprotect, [address, length, prot as u64, 0, 0, 0])
+            .map(|_| ())
+    }
+    pub(crate) fn remap(
+        &mut self,
+        address: u64,
+        length: u64,
+        flags: i32,
+        destination: u64,
+    ) -> Result<u64> {
+        self.syscall(
+            libc::SYS_mremap,
+            [address, length, length, flags as u64, destination, 0],
+        )
     }
 }

@@ -11,11 +11,18 @@ use tracing::{info, warn};
 use crate::injector::{InjectorConfig, MultiInjector};
 use crate::{hookfs, mount};
 
-#[derive(Debug)]
 pub struct MountInjector {
     original_path: PathBuf,
     new_path: PathBuf,
     injector_config: Vec<InjectorConfig>,
+    pending_recovery: Option<MountInjectionGuard>,
+}
+
+#[derive(PartialEq)]
+enum MountState {
+    FuseMounted,
+    BackingOnly,
+    Restored,
 }
 
 pub struct MountInjectionGuard {
@@ -24,6 +31,7 @@ pub struct MountInjectionGuard {
     pub hookfs: Arc<hookfs::HookFs>,
     handler: Option<JoinHandle<Result<()>>>,
     unmounter: Option<fuser::SessionUnmounter>,
+    state: MountState,
 }
 
 impl MountInjectionGuard {
@@ -36,44 +44,39 @@ impl MountInjectionGuard {
     }
 
     pub fn recover_mount(mut self) -> Result<()> {
-        let mount_point = self.original_path.clone();
+        self.try_recover_mount()
+    }
 
-        retry(Fixed::from_millis(500).take(20), || {
-            // fuser consumes its mount handle on failure; retries must call umount directly.
-            let result = match self.unmounter.take() {
-                Some(mut unmounter) => unmounter.unmount(),
-                None => umount(mount_point.as_path()).map_err(std::io::Error::from),
-            };
-            if let Err(err) = result {
-                info!("umount returns error: {:?}", err);
-                OperationResult::Retry(err)
-            } else {
-                OperationResult::Ok(())
-            }
-        })?;
-
-        info!("unmount successfully!");
-        self.handler
-            .take()
-            .ok_or(anyhow!("handler is empty"))?
-            .join()
-            .unwrap()?;
-
-        let new_path = self.new_path.clone();
-        let original_path = self.original_path;
-
-        let mounts = mount::MountsInfo::parse_mounts()?;
-
-        if mounts.non_root(&original_path)? {
-            // TODO: make the parent mount points private before move mount points
-            mounts.move_mount(&new_path, original_path)?;
-            if let Err(error) = remove_backing_directory(&new_path) {
-                warn!(path = %new_path.display(), %error, "could not remove backing directory");
-            }
-        } else {
-            return Err(anyhow!("inject on a root mount"));
+    pub fn try_recover_mount(&mut self) -> Result<()> {
+        if self.state == MountState::Restored {
+            return Ok(());
         }
-
+        if self.state == MountState::FuseMounted {
+            let mount_point = self.original_path.clone();
+            retry(Fixed::from_millis(500).take(20), || {
+                // fuser consumes its mount handle on failure; retry with umount.
+                let result = match self.unmounter.take() {
+                    Some(mut unmounter) => unmounter.unmount(),
+                    None => umount(mount_point.as_path()).map_err(std::io::Error::from),
+                };
+                match result {
+                    Ok(()) => OperationResult::Ok(()),
+                    Err(error) => OperationResult::Retry(error),
+                }
+            })?;
+            self.state = MountState::BackingOnly;
+        }
+        if let Some(handler) = self.handler.take() {
+            handler
+                .join()
+                .map_err(|_| anyhow!("FUSE dispatcher panicked"))??;
+        }
+        let mounts = mount::MountsInfo::parse_mounts()?;
+        mounts.move_mount(&self.new_path, &self.original_path)?;
+        self.state = MountState::Restored;
+        if let Err(error) = remove_backing_directory(&self.new_path) {
+            warn!(path = %self.new_path.display(), %error, "could not remove backing directory");
+        }
         Ok(())
     }
 }
@@ -110,7 +113,12 @@ impl MountInjector {
             original_path,
             new_path,
             injector_config,
+            pending_recovery: None,
         })
+    }
+
+    pub fn take_pending_recovery(&mut self) -> Option<MountInjectionGuard> {
+        self.pending_recovery.take()
     }
 
     // This method should be called in host namespace
@@ -134,6 +142,14 @@ impl MountInjector {
             injectors,
         ));
 
+        self.pending_recovery = Some(MountInjectionGuard {
+            original_path: self.original_path.clone(),
+            new_path: self.new_path.clone(),
+            hookfs: hookfs.clone(),
+            handler: None,
+            unmounter: None,
+            state: MountState::BackingOnly,
+        });
         let fs = hookfs::AsyncFileSystem::from(hookfs.clone());
 
         let mut config = fuser::Config::default();
@@ -148,16 +164,14 @@ impl MountInjector {
         let mut session = match fuser::Session::new(fs, &self.original_path, &config) {
             Ok(session) => session,
             Err(error) => {
-                if let Err(rollback_error) = mounts.move_mount(&self.new_path, &self.original_path)
-                {
-                    let message = format!(
-                        "FUSE mount failed: {}; failed to restore mount from {} to {}: {:#}",
-                        error,
-                        self.new_path.display(),
-                        self.original_path.display(),
-                        rollback_error
-                    );
-                    return Err(anyhow!(error).context(message));
+                match self.pending_recovery.as_mut().unwrap().try_recover_mount() {
+                    Ok(()) => {
+                        self.pending_recovery = None;
+                    }
+                    Err(rollback) => {
+                        return Err(anyhow!(error)
+                            .context(format!("mount rollback remains pending: {rollback:#}")))
+                    }
                 }
                 return Err(error.into());
             }
@@ -170,13 +184,11 @@ impl MountInjector {
 
             Ok(())
         });
-        Ok(MountInjectionGuard {
-            handler: Some(handler),
-            unmounter: Some(unmounter),
-            hookfs,
-            original_path: self.original_path.clone(),
-            new_path: self.new_path.clone(),
-        })
+        let mut guard = self.pending_recovery.take().unwrap();
+        guard.handler = Some(handler);
+        guard.unmounter = Some(unmounter);
+        guard.state = MountState::FuseMounted;
+        Ok(guard)
     }
 }
 

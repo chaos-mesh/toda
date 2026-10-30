@@ -1322,7 +1322,7 @@ async fn async_truncate(path: &Path, len: i64) -> Result<()> {
 
 async fn async_utimensat(path: CString, times: [libc::timespec; 2]) -> Result<()> {
     spawn_blocking(move || unsafe {
-        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let path_ptr = path.as_ptr();
         let ret = libc::utimensat(
             0,
             path_ptr,
@@ -1347,7 +1347,7 @@ async fn async_readlink(path: &Path) -> Result<OsString> {
 
 async fn async_mknod(path: CString, mode: u32, rdev: u64) -> Result<()> {
     spawn_blocking(move || {
-        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let path_ptr = path.as_ptr();
         let ret = unsafe { libc::mknod(path_ptr, mode, rdev) };
 
         if ret != 0 {
@@ -1373,7 +1373,7 @@ async fn async_unlink(path: &Path) -> Result<()> {
 
 async fn async_rmdir(path: CString) -> Result<()> {
     spawn_blocking(move || {
-        let path_ptr = &path.as_bytes_with_nul()[0] as *const u8 as *mut i8;
+        let path_ptr = path.as_ptr();
         let ret = unsafe { libc::rmdir(path_ptr) };
 
         if ret != 0 {

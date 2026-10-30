@@ -44,6 +44,9 @@ pub fn convert_libc_stat_to_fuse_stat(stat: libc::stat) -> Result<FileAttr> {
         ctime: system_time(stat.st_ctime, stat.st_ctime_nsec),
         kind,
         perm: (stat.st_mode & 0o7777) as u16,
+        #[cfg(target_arch = "aarch64")]
+        nlink: stat.st_nlink,
+        #[cfg(not(target_arch = "aarch64"))]
         nlink: stat.st_nlink as u32,
         uid: stat.st_uid,
         gid: stat.st_gid,
