@@ -1,286 +1,110 @@
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::io::{Cursor, Read, Write};
-use std::iter::FromIterator;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
-use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
-use itertools::Itertools;
-use procfs::process::FDTarget;
-use tracing::{error, info, trace};
+use anyhow::{ensure, Context, Result};
 
-use super::utils::all_processes;
-use super::{ptrace, Replacer};
+use crate::ptrace::TracedProcess;
 
-#[derive(Clone, Copy)]
-#[repr(packed)]
-#[repr(C)]
-struct ReplaceCase {
-    fd: u64,
-    new_path_offset: u64,
+#[derive(Debug)]
+pub(super) struct FdChange {
+    pub target: u64,
+    pub path: PathBuf,
+    flags: i32,
+    cloexec: bool,
+    position: Option<u64>,
+    original: Option<u64>,
+    replacement: Option<u64>,
+    installed: bool,
 }
 
-impl ReplaceCase {
-    pub fn new(fd: u64, new_path_offset: u64) -> ReplaceCase {
-        ReplaceCase {
-            fd,
-            new_path_offset,
-        }
-    }
-}
-
-struct ProcessAccessorBuilder {
-    cases: Vec<ReplaceCase>,
-    new_paths: Cursor<Vec<u8>>,
-}
-
-impl ProcessAccessorBuilder {
-    pub fn new() -> ProcessAccessorBuilder {
-        ProcessAccessorBuilder {
-            cases: Vec::new(),
-            new_paths: Cursor::new(Vec::new()),
+impl FdChange {
+    pub fn new(target: u64, path: PathBuf) -> Self {
+        Self {
+            target,
+            path,
+            flags: 0,
+            cloexec: false,
+            position: None,
+            original: None,
+            replacement: None,
+            installed: false,
         }
     }
 
-    pub fn build(self, process: ptrace::TracedProcess) -> Result<ProcessAccessor> {
-        Ok(ProcessAccessor {
-            process,
-
-            cases: self.cases,
-            new_paths: self.new_paths,
-        })
-    }
-
-    pub fn push_case(&mut self, fd: u64, new_path: PathBuf) -> anyhow::Result<()> {
-        info!("push case fd: {}, new_path: {}", fd, new_path.display());
-
-        let mut new_path = new_path
-            .to_str()
-            .ok_or(anyhow!("fd contains non-UTF-8 character"))?
-            .as_bytes()
-            .to_vec();
-
-        new_path.push(0);
-
-        let offset = self.new_paths.position();
-        self.new_paths.write_all(new_path.as_slice())?;
-
-        self.cases.push(ReplaceCase::new(fd, offset));
-
-        Ok(())
-    }
-}
-
-impl FromIterator<(u64, PathBuf)> for ProcessAccessorBuilder {
-    fn from_iter<T: IntoIterator<Item = (u64, PathBuf)>>(iter: T) -> Self {
-        let mut builder = Self::new();
-        for (fd, path) in iter {
-            if let Err(err) = builder.push_case(fd, path) {
-                error!("fail to write to AccessorBuilder. Error: {:?}", err)
+    pub fn prepare(&mut self, process: &mut TracedProcess) -> Result<()> {
+        self.flags = process.fcntl(self.target, libc::F_GETFL, 0)? as i32;
+        let metadata = std::fs::metadata(format!("/proc/{}/fd/{}", process.pid, self.target))?;
+        ensure!(
+            metadata.is_file() || metadata.is_dir() || self.flags & libc::O_PATH != 0,
+            "only regular, directory, and O_PATH descriptors can be replaced"
+        );
+        self.cloexec = process.fcntl(self.target, libc::F_GETFD, 0)? & libc::FD_CLOEXEC as u64 != 0;
+        self.original = Some(process.fcntl(self.target, libc::F_DUPFD_CLOEXEC, 0)?);
+        if self.flags & libc::O_PATH == 0 {
+            match process.seek(self.target, 0, libc::SEEK_CUR) {
+                Ok(position) => self.position = Some(position),
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .and_then(|e| e.raw_os_error())
+                        == Some(libc::ESPIPE) => {}
+                Err(error) => return Err(error),
             }
         }
-
-        builder
-    }
-}
-
-struct ProcessAccessor {
-    process: ptrace::TracedProcess,
-
-    cases: Vec<ReplaceCase>,
-    new_paths: Cursor<Vec<u8>>,
-}
-
-impl Debug for ProcessAccessor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.process.fmt(f)
-    }
-}
-
-impl ProcessAccessor {
-    pub fn run(&mut self) -> anyhow::Result<()> {
-        self.new_paths.set_position(0);
-
-        let mut new_paths = Vec::new();
-        self.new_paths.read_to_end(&mut new_paths)?;
-
-        let size = self.cases.len() * std::mem::size_of::<ReplaceCase>();
-        let cases = unsafe { std::slice::from_raw_parts(self.cases.as_ptr().cast::<u8>(), size) };
-
-        self.process.run_codes(|addr| {
-            let mut vec_rt =
-                dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(addr as usize);
-            dynasm!(vec_rt
-                ; .arch x64
-                ; ->cases:
-                ; .bytes cases
-                ; ->cases_length:
-                ; .u64 cases.len() as u64
-                ; ->new_paths:
-                ; .bytes new_paths.as_slice()
-                ; nop
-                ; nop
-            );
-
-            trace!("static bytes placed");
-            let replace = vec_rt.offset();
-            dynasm!(vec_rt
-                ; .arch x64
-                // set r15 to 0
-                ; xor r15, r15
-                ; lea r14, [-> cases]
-
-                ; jmp ->end
-                ; ->start:
-                // fcntl
-                ; mov rax, 0x48
-                ; mov rdi, QWORD [r14+r15] // fd
-                ; mov rsi, 0x3
-                ; mov rdx, 0x0
-                ; syscall
-                ; mov rsi, rax
-                // open
-                ; mov rax, 0x2
-                ; lea rdi, [-> new_paths]
-                ; add rdi, QWORD [r14+r15+8] // path
-                ; mov rdx, 0x0
-                ; syscall
-                ; mov r12, rax // store newly opened fd in r12
-                // lseek
-                ; mov rax, 0x8
-                ; mov rdi, QWORD [r14+r15] // fd
-                ; mov rsi, 0
-                ; mov rdx, libc::SEEK_CUR
-                ; syscall
-                ; mov rdi, r12
-                ; mov rsi, rax
-                // lseek
-                ; mov rax, 0x8
-                ; mov rdx, libc::SEEK_SET
-                ; syscall
-                // dup2
-                ; mov rax, 0x21
-                ; mov rdi, r12
-                ; mov rsi, QWORD [r14+r15] // fd
-                ; syscall
-                // close
-                ; mov rax, 0x3
-                ; mov rdi, r12
-                ; syscall
-
-                ; add r15, std::mem::size_of::<ReplaceCase>() as i32
-                ; ->end:
-                ; mov r13, QWORD [->cases_length]
-                ; cmp r15, r13
-                ; jb ->start
-
-                ; int3
-            );
-
-            let instructions = vec_rt.finalize()?;
-
-            Ok((replace.0 as u64, instructions))
-        })?;
-
-        trace!("reopen successfully");
         Ok(())
     }
-}
 
-pub struct FdReplacer {
-    processes: HashMap<i32, ProcessAccessor>,
-}
-
-impl FdReplacer {
-    pub fn prepare<P1: AsRef<Path>, P2: AsRef<Path>>(
-        detect_path: P1,
-        new_path: P2,
-    ) -> Result<FdReplacer> {
-        info!("preparing fd replacer");
-
-        let detect_path = detect_path.as_ref();
-        let new_path = new_path.as_ref();
-
-        let processes = all_processes()?
-            .filter_map(|process| -> Option<_> {
-                let pid = process.pid;
-
-                let traced_process = match ptrace::trace(pid) {
-                    Ok(p) => p,
-                    Err(err) => {
-                        error!("fail to trace process: {} {}", pid, err);
-                        return None;
-                    }
-                };
-                let fd = process.fd().ok()?;
-
-                Some((traced_process, fd))
-            })
-            .flat_map(|(process, fd)| {
-                fd.into_iter()
-                    .filter_map(|entry| entry.ok())
-                    .filter_map(|entry| match entry.target {
-                        FDTarget::Path(path) => Some((entry.fd as u64, path)),
-                        _ => None,
-                    })
-                    .filter(|(_, path)| path.starts_with(detect_path))
-                    .filter_map(move |(fd, path)| {
-                        trace!("replace fd({}): {}", fd, path.display());
-                        let stripped_path = path.strip_prefix(detect_path).ok()?;
-                        Some((process.clone(), (fd, new_path.join(stripped_path))))
-                    })
-            })
-            .chunk_by(|(process, _)| process.pid)
-            .into_iter()
-            .filter_map(|(pid, group)| Some((ptrace::trace(pid).ok()?, group)))
-            .map(|(process, group)| (process, group.map(|(_, group)| group)))
-            .filter_map(|(process, group)| {
-                let pid = process.pid;
-                match group.collect::<ProcessAccessorBuilder>().build(process) {
-                    Ok(accessor) => Some((pid, accessor)),
-                    Err(err) => {
-                        error!("fail to build accessor: {:?}", err);
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        Ok(FdReplacer { processes })
-    }
-}
-
-impl Replacer for FdReplacer {
-    fn run(&mut self) -> Result<()> {
-        info!("running fd replacer");
-        for accessor in self.processes.values_mut() {
-            accessor.run()?;
+    pub fn stage(&mut self, process: &mut TracedProcess) -> Result<()> {
+        if self.replacement.is_some() {
+            return Ok(());
         }
-
+        let flags =
+            (self.flags & !(libc::O_CREAT | libc::O_EXCL | libc::O_TRUNC)) | libc::O_CLOEXEC;
+        let fd = process
+            .open(&self.path, flags)
+            .with_context(|| format!("reopen fd {} at {}", self.target, self.path.display()))?;
+        self.replacement = Some(fd);
+        if self.flags & libc::O_PATH == 0 {
+            process.fcntl(fd, libc::F_SETFL, self.flags as u64)?;
+        }
+        if let Some(position) = self.position {
+            process.seek(fd, position, libc::SEEK_SET)?;
+        }
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    pub fn install(&mut self, process: &mut TracedProcess) -> Result<()> {
+        if !self.installed {
+            process.duplicate_to(
+                self.replacement.context("fd was not staged")?,
+                self.target,
+                self.cloexec,
+            )?;
+            self.installed = true;
+        }
+        Ok(())
+    }
 
-    #[test]
-    fn replacement_records_match_x64_code_layout() {
-        let mut builder = ProcessAccessorBuilder::new();
-        builder.push_case(7, PathBuf::from("/first")).unwrap();
-        builder.push_case(9, PathBuf::from("/second")).unwrap();
+    pub fn rollback(&mut self, process: &mut TracedProcess) -> Result<()> {
+        if self.installed {
+            process.duplicate_to(
+                self.original.context("original fd is unavailable")?,
+                self.target,
+                self.cloexec,
+            )?;
+            self.installed = false;
+        }
+        Ok(())
+    }
 
-        let size = builder.cases.len() * std::mem::size_of::<ReplaceCase>();
-        let bytes =
-            unsafe { std::slice::from_raw_parts(builder.cases.as_ptr().cast::<u8>(), size) };
-        let expected: Vec<u8> = [7_u64, 0, 9, 7]
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect();
-
-        assert_eq!(bytes, expected);
-        assert_eq!(builder.new_paths.into_inner(), b"/first\0/second\0");
+    pub fn cleanup(&mut self, process: &mut TracedProcess) -> Result<()> {
+        if let Some(fd) = self.replacement {
+            process.close(fd)?;
+            self.replacement = None;
+        }
+        if let Some(fd) = self.original {
+            process.close(fd)?;
+            self.original = None;
+        }
+        Ok(())
     }
 }

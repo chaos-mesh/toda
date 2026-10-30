@@ -30,7 +30,7 @@ use toda::mount_injector::{MountInjectionGuard, MountInjector};
 use toda::replacer::{Replacer, UnionReplacer};
 use toda::utils::encode_path;
 use tokio::runtime::Runtime;
-use tracing::{info, instrument};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug, Clone)]
@@ -46,77 +46,135 @@ struct Options {
     verbose: String,
 }
 
-#[instrument(skip(option))]
-fn inject(option: Options, injector_config: Vec<InjectorConfig>) -> Result<MountInjectionGuard> {
-    info!("inject with config {:?}", injector_config);
-
-    let path = option.path.clone();
-
-    info!("canonicalizing path {}", path.display());
-    let path = path.canonicalize()?;
-
-    let replacer = if !option.mount_only {
-        let mut replacer = UnionReplacer::default();
-        replacer.prepare(&path, &path)?;
-
-        Some(replacer)
-    } else {
-        None
-    };
-
-    if let Err(err) = fuse_device::mkfuse_node() {
-        info!("fail to make /dev/fuse node: {}", err)
-    }
-
-    let mut injection = MountInjector::create_injection(&option.path, injector_config)?;
-    let mount_guard = injection.mount()?;
-    info!("mount successfully");
-
-    if let Some(mut replacer) = replacer {
-        // At this time, `mount --move` has already been executed.
-        // Our FUSE are mounted on the "path", so we
-        replacer.run()?;
-        drop(replacer);
-        info!("replacer detached");
-    }
-
-    info!("enable injection");
-    mount_guard.enable_injection();
-
-    Ok(mount_guard)
+enum Phase {
+    SetupRollback,
+    Active,
+    RecoveryRollback,
+    RecoveryCommit,
+    RecoveryMount,
+    ReleaseToActive,
+    ReleaseToDone,
+    Done,
 }
 
-#[instrument(skip(option, mount_guard))]
-fn resume(option: Options, mount_guard: MountInjectionGuard) -> Result<()> {
-    info!("disable injection");
-    mount_guard.disable_injection();
+struct Injection {
+    option: Options,
+    mount: Option<MountInjectionGuard>,
+    references: Option<UnionReplacer>,
+    phase: Phase,
+}
 
-    let path = option.path.clone();
+impl Injection {
+    fn new(option: Options) -> Self {
+        Self {
+            option,
+            mount: None,
+            references: None,
+            phase: Phase::SetupRollback,
+        }
+    }
 
-    info!("canonicalizing path {}", path.display());
-    let path = path.canonicalize()?;
-    let (_, new_path) = encode_path(&path)?;
+    fn start(&mut self) -> Result<()> {
+        self.option.path = self.option.path.canonicalize()?;
+        if !self.option.mount_only {
+            let references = self.references.insert(UnionReplacer::default());
+            references.prepare(&self.option.path, &self.option.path)?;
+        }
+        if let Err(error) = fuse_device::mkfuse_node() {
+            info!(%error, "could not create /dev/fuse node");
+        }
+        let mut injection =
+            MountInjector::create_injection(&self.option.path, Vec::<InjectorConfig>::new())?;
+        match injection.mount() {
+            Ok(guard) => self.mount = Some(guard),
+            Err(error) => {
+                self.mount = injection.take_pending_recovery();
+                return Err(error);
+            }
+        }
+        if let Some(references) = &mut self.references {
+            references.run()?;
+        }
+        self.phase = Phase::ReleaseToActive;
+        self.finish_references()?;
+        self.mount.as_ref().unwrap().enable_injection();
+        self.phase = Phase::Active;
+        info!("injection enabled");
+        Ok(())
+    }
 
-    let replacer = if !option.mount_only {
-        let mut replacer = UnionReplacer::default();
-        replacer.prepare(&path, &new_path)?;
-        info!("running replacer");
-        let result = replacer.run();
-        info!("replace result: {:?}", result);
+    fn finish_references(&mut self) -> Result<()> {
+        if let Some(references) = &mut self.references {
+            references.commit()?;
+            references.release()?;
+        }
+        self.references = None;
+        Ok(())
+    }
 
-        Some(replacer)
-    } else {
-        None
-    };
-
-    info!("recovering mount");
-    mount_guard.recover_mount()?;
-
-    info!("replacers detached");
-    info!("recover successfully");
-
-    drop(replacer);
-    Ok(())
+    fn recover(&mut self) -> Result<()> {
+        loop {
+            match self.phase {
+                Phase::SetupRollback => {
+                    if let Some(references) = &mut self.references {
+                        references.rollback()?;
+                    }
+                    if let Some(mount) = &mut self.mount {
+                        mount.try_recover_mount()?;
+                    }
+                    if let Some(references) = &mut self.references {
+                        references.release()?;
+                    }
+                    self.references = None;
+                    self.mount = None;
+                    self.phase = Phase::Done;
+                }
+                Phase::ReleaseToActive => {
+                    self.finish_references()?;
+                    self.phase = Phase::Active;
+                }
+                Phase::Active => {
+                    self.mount.as_ref().unwrap().disable_injection();
+                    self.phase = Phase::RecoveryRollback;
+                    if !self.option.mount_only {
+                        let (_, backing) = encode_path(&self.option.path)?;
+                        let references = self.references.insert(UnionReplacer::default());
+                        references.prepare(&self.option.path, backing)?;
+                        references.run()?;
+                    }
+                    self.phase = Phase::RecoveryCommit;
+                }
+                Phase::RecoveryRollback => {
+                    if let Some(references) = &mut self.references {
+                        references.rollback()?;
+                        references.release()?;
+                    }
+                    self.references = None;
+                    self.phase = Phase::Active;
+                    anyhow::bail!(
+                        "failed recovery was rolled back; send SIGINT or SIGTERM to retry"
+                    );
+                }
+                Phase::RecoveryCommit => {
+                    if let Some(references) = &mut self.references {
+                        references.commit()?;
+                    }
+                    self.phase = Phase::RecoveryMount;
+                }
+                Phase::RecoveryMount => {
+                    self.mount.as_mut().unwrap().try_recover_mount()?;
+                    self.phase = Phase::ReleaseToDone;
+                }
+                Phase::ReleaseToDone => {
+                    self.finish_references()?;
+                    self.references = None;
+                    self.mount = None;
+                    self.phase = Phase::Done;
+                }
+                Phase::Done => return Ok(()),
+            }
+        }
+    }
 }
 
 static mut SIGNAL_PIPE_WRITER: RawFd = 0;
@@ -125,7 +183,7 @@ const SIGNAL_MSG: [u8; 6] = *b"SIGNAL";
 
 extern "C" fn signal_handler(_: libc::c_int) {
     unsafe {
-        write(BorrowedFd::borrow_raw(SIGNAL_PIPE_WRITER), &SIGNAL_MSG).unwrap();
+        let _ = write(BorrowedFd::borrow_raw(SIGNAL_PIPE_WRITER), &SIGNAL_MSG);
     }
 }
 
@@ -154,32 +212,35 @@ fn main() -> Result<()> {
         .with_env_filter(env_filter)
         .init();
     info!("start with option: {:?}", option);
-    let mount_injector = inject(option.clone(), vec![]);
-
-    let status = match &mount_injector {
-        Ok(_) => Ok(()),
-        Err(e) => Err(anyhow::Error::msg(e.to_string())),
-    };
-
-    {
-        let hookfs = match &mount_injector {
-            Ok(e) => Some(e.hookfs.clone()),
-            Err(_) => None,
-        };
-        thread::spawn(|| {
-            Runtime::new()
-                .expect("Failed to create Tokio runtime")
-                .block_on(start_server(jsonrpc::RpcImpl::new(
-                    Mutex::new(status),
-                    hookfs,
-                )));
-        });
+    let mut injection = Injection::new(option);
+    let setup = injection.start();
+    if let Err(error) = &setup {
+        error!(error = %format!("{error:#}"), "injection setup failed; recovery resources retained");
     }
-    info!("waiting for signal to exit");
-    wait_for_signal(&reader)?;
-    info!("start to recover and exit");
-    if let Ok(v) = mount_injector {
-        resume(option, v)?;
+    let status = setup.map_err(|error| anyhow::Error::msg(error.to_string()));
+    let hookfs = injection.mount.as_ref().map(|mount| mount.hookfs.clone());
+    thread::spawn(|| {
+        Runtime::new()
+            .expect("Failed to create Tokio runtime")
+            .block_on(start_server(jsonrpc::RpcImpl::new(
+                Mutex::new(status),
+                hookfs,
+            )));
+    });
+    loop {
+        info!("waiting for SIGINT or SIGTERM to recover");
+        if let Err(error) = wait_for_signal(&reader) {
+            error!(%error, "signal wait failed; retaining recovery resources");
+            continue;
+        }
+        match injection.recover() {
+            Ok(()) => {
+                info!("recovery completed");
+                return Ok(());
+            }
+            Err(error) => {
+                error!(error = %format!("{error:#}"), "recovery incomplete; resources retained for another signal")
+            }
+        }
     }
-    Ok(())
 }
