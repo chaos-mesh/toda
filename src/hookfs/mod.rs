@@ -19,7 +19,7 @@ use fuser::*;
 use libc::{c_void, lgetxattr, llistxattr, lremovexattr, lsetxattr};
 use nix::dir;
 use nix::errno::Errno;
-use nix::fcntl::{open, readlink, renameat, AtFlags, OFlag, AT_FDCWD};
+use nix::fcntl::{open, readlink, renameat2, AtFlags, OFlag, AT_FDCWD};
 use nix::sys::{stat, statfs};
 use nix::unistd::{
     close, fchownat, fsync, linkat, mkdir, symlinkat, truncate, unlink, AccessFlags, Gid, Uid,
@@ -684,7 +684,7 @@ impl AsyncFileSystemImpl for HookFs {
         name: OsString,
         newparent: u64,
         newname: OsString,
-        _flags: u32,
+        flags: u32,
     ) -> Result<()> {
         trace!("rename");
         inject_with_parent_and_name!(self, RENAME, parent, &name);
@@ -709,14 +709,27 @@ impl AsyncFileSystemImpl for HookFs {
             new_path.display()
         );
 
+        let flags = nix::fcntl::RenameFlags::from_bits_retain(flags);
         let new_path_clone = new_path.clone();
         let old_path_clone = old_path.clone();
-        spawn_blocking(move || renameat(AT_FDCWD, &old_path_clone, AT_FDCWD, &new_path_clone))
-            .await??;
+        spawn_blocking(move || {
+            renameat2(AT_FDCWD, &old_path_clone, AT_FDCWD, &new_path_clone, flags)
+        })
+        .await??;
 
         let stat = self.get_file_attr(&new_path).await?;
-        trace!("remove ({:x}, {})", stat.ino.0, old_path.display());
-        inode_map.remove_path(stat.ino.0, &old_path);
+        if flags.contains(nix::fcntl::RenameFlags::RENAME_EXCHANGE) {
+            let exchanged = self.get_file_attr(&old_path).await?;
+            trace!("remove ({:x}, {})", exchanged.ino.0, new_path.display());
+            inode_map.remove_path(exchanged.ino.0, &new_path);
+            trace!("remove ({:x}, {})", stat.ino.0, old_path.display());
+            inode_map.remove_path(stat.ino.0, &old_path);
+            trace!("insert ({:x}, {})", exchanged.ino.0, old_path.display());
+            inode_map.insert_path(exchanged.ino.0, &old_path);
+        } else {
+            trace!("remove ({:x}, {})", stat.ino.0, old_path.display());
+            inode_map.remove_path(stat.ino.0, &old_path);
+        }
         trace!("insert ({:x}, {})", stat.ino.0, new_path.display());
         inode_map.insert_path(stat.ino.0, &new_path);
 

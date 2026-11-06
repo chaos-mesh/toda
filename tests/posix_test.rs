@@ -375,6 +375,31 @@ fn rename_overwrite(test_path: PathBuf, dest_exist: bool) {
 }
 
 #[test]
+fn rename_exchange() {
+    let (test_path, _session) = init("rename_exchange");
+    let src = test_path.join("src");
+    let dest = test_path.join("dest");
+    write(&src, "src").unwrap();
+    write(&dest, "dest").unwrap();
+    let src_ino = stat::stat(&src).unwrap().st_ino;
+    let dest_ino = stat::stat(&dest).unwrap().st_ino;
+
+    fcntl::renameat2(
+        fcntl::AT_FDCWD,
+        &src,
+        fcntl::AT_FDCWD,
+        &dest,
+        fcntl::RenameFlags::RENAME_EXCHANGE,
+    )
+    .unwrap();
+
+    assert_eq!(read_to_string(&src).unwrap(), "dest");
+    assert_eq!(read_to_string(&dest).unwrap(), "src");
+    assert_eq!(stat::stat(&src).unwrap().st_ino, dest_ino);
+    assert_eq!(stat::stat(&dest).unwrap().st_ino, src_ino);
+}
+
+#[test]
 fn read_unlink() {
     let (test_path, _session) = init("rename_overwrite_dest_no_exist");
     let path = test_path.join("file");
